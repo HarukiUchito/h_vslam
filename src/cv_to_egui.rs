@@ -1,7 +1,31 @@
+use opencv::core::Mat;
+use opencv::core::Scalar;
 use opencv::core::Vector;
+use opencv::features2d::*;
 use opencv::imgcodecs;
 use opencv::imgproc::INTER_LINEAR;
-use opencv::prelude::MatTraitConst;
+use opencv::prelude::{Feature2DTrait, MatTraitConst};
+use opencv::types::VectorOfKeyPoint;
+
+fn draw_keypoints(mat: &Mat) -> Result<Mat, opencv::Error> {
+    let num_features = 1000;
+    let mut gftt =
+        <dyn opencv::features2d::GFTTDetector>::create(num_features, 0.01, 1.0, 3, false, 0.04)?;
+    let mask = Mat::default();
+    let mut keypoints = VectorOfKeyPoint::new();
+    gftt.detect(&mat, &mut keypoints, &mask)?;
+
+    let mut out_image = Mat::default();
+    opencv::features2d::draw_keypoints(
+        &mat,
+        &keypoints,
+        &mut out_image,
+        Scalar::all(-1.0),
+        DrawMatchesFlags::DEFAULT,
+    )?;
+
+    Ok(out_image)
+}
 
 pub fn image_vector(
     left_image_path: &str,
@@ -10,14 +34,22 @@ pub fn image_vector(
     let img1 = imgcodecs::imread(left_image_path, 0).unwrap();
     let img2 = imgcodecs::imread(right_image_path, 0).unwrap();
 
+    let k_img1 = draw_keypoints(&img1).unwrap();
+    let k_img2 = draw_keypoints(&img2).unwrap();
+
+    //    let mut rgb_img2 = opencv::core::Mat::default();
+    //    opencv::imgproc::cvt_color(&img2, &mut rgb_img2, opencv::imgproc::COLOR_GRAY2RGB, 0)?;
+
+    // concat left, right images
     let mut lr_img = opencv::core::Mat::default();
-    println!("img1 w: {}, h: {}", img1.cols(), img1.rows());
     let mut vec = opencv::types::VectorOfMat::new();
-    vec.push(img1);
-    vec.push(img2);
-    opencv::core::hconcat(&vec, &mut lr_img)?;
+    vec.push(k_img1);
+    vec.push(k_img2);
+
+    opencv::core::hconcat(&vec, &mut lr_img).unwrap();
     println!("hcon w: {}, h: {}", lr_img.cols(), lr_img.rows());
 
+    // resize
     let mut resized = opencv::core::Mat::default();
     opencv::imgproc::resize(
         &lr_img,

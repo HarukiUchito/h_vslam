@@ -13,22 +13,57 @@ use tokio;
 mod cv_to_egui;
 
 struct SharedData {
+    seq_dir_path: std::path::PathBuf,
     cnt: i32,
     img_index: usize,
+    retained_image: RetainedImage,
     status_text: String,
 }
 
 impl SharedData {
     fn new(cnt: i32) -> Self {
+        let seq_dir_path = std::path::PathBuf::from(
+            "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/00",
+        );
+
+        let black = Color32::from_rgb(255, 255, 255);
+        let black_image = ColorImage::new([2482, 376], black);
         SharedData {
+            seq_dir_path: seq_dir_path,
             cnt: cnt,
             img_index: 0,
+            retained_image: RetainedImage::from_color_image("", black_image),
             status_text: "none".to_string(),
         }
     }
 
+    fn previous_frame(&mut self) {
+        self.img_index = self.img_index.checked_sub(1).unwrap_or(self.img_index);
+    }
+
+    fn next_frame(&mut self) {
+        self.img_index += 1;
+    }
+
     fn update(&mut self) {
         self.cnt += 1;
+        match cv_to_egui::image_vector(
+            self.seq_dir_path
+                .join("image_0")
+                .join(format!("{:06}.png", self.img_index))
+                .to_str()
+                .unwrap(),
+            self.seq_dir_path
+                .join("image_1")
+                .join(format!("{:06}.png", self.img_index))
+                .to_str()
+                .unwrap(),
+        ) {
+            Ok(v) => {
+                self.retained_image = RetainedImage::from_image_bytes("img", &v.as_slice()).unwrap()
+            }
+            Err(..) => self.status_text = "image update failed".to_string(),
+        }
     }
 }
 
@@ -36,11 +71,11 @@ impl SharedData {
 async fn main() {
     let (tx, rx) = mpsc::channel();
 
-    let shared_data = SharedData::new(0);
+    let mut shared_data = SharedData::new(0);
+    shared_data.update();
     let shared_arc = Arc::new(Mutex::new(shared_data));
     let shared_arc_main = Arc::clone(&shared_arc);
     let mut app = MyApp::new(tx, shared_arc);
-    app.update();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
 
@@ -51,11 +86,6 @@ async fn main() {
             if repaint_cnt > 9 {
                 repaint_cnt = 0;
                 egui::Context::request_repaint(&ctx);
-            }
-
-            {
-                let mut guard = shared_arc_main.lock().expect("Couldn't get lock");
-                guard.update();
             }
 
             interval.tick().await; // ticks after 10ms
@@ -75,8 +105,6 @@ async fn main() {
 }
 
 struct MyApp {
-    seq_dir_path: std::path::PathBuf,
-    retained_image: RetainedImage,
     tx: Sender<egui::Context>,
     ctx_sent: bool,
     shared_data_arc: Arc<Mutex<SharedData>>,
@@ -84,43 +112,10 @@ struct MyApp {
 
 impl MyApp {
     fn new(tx: Sender<egui::Context>, shared_data_arc: Arc<Mutex<SharedData>>) -> Self {
-        let seq_dir_path = std::path::PathBuf::from(
-            "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/00",
-        );
-
-        let black = Color32::from_rgb(255, 255, 255);
-        let black_image = ColorImage::new([2482, 376], black);
         Self {
-            seq_dir_path: seq_dir_path,
-            retained_image: RetainedImage::from_color_image("", black_image),
             tx: tx,
             ctx_sent: false,
             shared_data_arc: shared_data_arc,
-        }
-    }
-
-    fn status_update(&self, msg: &str) {
-        let mut guard = self.shared_data_arc.lock().expect("Couldn't get lock");
-        guard.status_text = msg.to_string();
-    }
-
-    fn update(&mut self) {
-        match cv_to_egui::image_vector(
-            self.seq_dir_path
-                .join("image_0")
-                .join("000000.png")
-                .to_str()
-                .unwrap(),
-            self.seq_dir_path
-                .join("image_1")
-                .join("000000.png")
-                .to_str()
-                .unwrap(),
-        ) {
-            Ok(v) => {
-                self.retained_image = RetainedImage::from_image_bytes("img", &v.as_slice()).unwrap()
-            }
-            Err(..) => self.status_update("image update failed"),
         }
     }
 }
@@ -133,12 +128,12 @@ impl eframe::App for MyApp {
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
+                    let guard = self.shared_data_arc.lock().expect("Couldn't get lock");
                     ui.label("seq path");
                     ui.label(WidgetText::from(
-                        self.seq_dir_path.to_str().unwrap_or("empty"),
+                        guard.seq_dir_path.to_str().unwrap_or("empty"),
                     ));
                     ui.end_row();
-                    let guard = self.shared_data_arc.lock().expect("Couldn't get lock");
                     ui.label("status");
                     ui.label(guard.status_text.as_str());
                 });
@@ -175,20 +170,26 @@ impl eframe::App for MyApp {
             egui::containers::TopBottomPanel::top(egui::Id::new("camera")).show(ctx, |ui| {
                 ui.group(|ui| {
                     ui.heading("Camera");
-                    self.retained_image.show(ui);
+                    let guard = self.shared_data_arc.lock().expect("Couldn't get lock");
+                    guard.retained_image.show(ui);
                     //ui.set_min_width(200.0);
                 });
             });
             egui::containers::TopBottomPanel::bottom(egui::Id::new("other")).show(ctx, |ui| {
                 ui.heading("Control");
                 ui.horizontal(|ui| {
+                    let mut guard = self.shared_data_arc.lock().expect("Couldn't get lock");
+                    let mut reload = false;
                     if ui.button("previous frame").clicked() {
-                        let mut guard = self.shared_data_arc.lock().expect("Couldn't get lock");
-                        guard.img_index += 1;
-                        ()
+                        guard.previous_frame();
+                        reload = true;
                     }
                     if ui.button("next frame").clicked() {
-                        ()
+                        guard.next_frame();
+                        reload = true;
+                    }
+                    if reload {
+                        guard.update();
                     }
                 });
 
