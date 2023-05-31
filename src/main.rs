@@ -10,6 +10,10 @@ use eframe::egui;
 use egui_extras::RetainedImage;
 use tokio;
 
+use env_logger;
+use log::{debug, error, info, warn};
+use std::env;
+
 mod cv_to_egui;
 
 struct SharedData {
@@ -69,13 +73,15 @@ impl SharedData {
 
 #[tokio::main]
 async fn main() {
+    env::set_var("RUST_LOG", "debug");
+    env_logger::init();
     let (tx, rx) = mpsc::channel();
 
     let mut shared_data = SharedData::new(0);
     shared_data.update();
     let shared_arc = Arc::new(Mutex::new(shared_data));
-    let shared_arc_main = Arc::clone(&shared_arc);
-    let mut app = MyApp::new(tx, shared_arc);
+    //let shared_arc_main = Arc::clone(&shared_arc);
+    let app = MyApp::new(tx, shared_arc);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
 

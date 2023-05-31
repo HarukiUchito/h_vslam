@@ -4,16 +4,53 @@ use opencv::core::Vector;
 use opencv::features2d::*;
 use opencv::imgcodecs;
 use opencv::imgproc::INTER_LINEAR;
-use opencv::prelude::{Feature2DTrait, MatTraitConst};
+use opencv::prelude::Feature2DTrait;
 use opencv::types::VectorOfKeyPoint;
 
+use opencv::core::KeyPoint;
+
+use env_logger;
+use log::debug;
+
+struct Feature {
+    position: KeyPoint,
+}
+
+impl Feature {
+    fn new(kp: &KeyPoint) -> Feature {
+        Feature { position: *kp }
+    }
+}
+
+struct Frame {
+    left_features: Vec<Feature>,
+}
+
+impl Frame {
+    fn new() -> Frame {
+        Frame {
+            left_features: Vec::new(),
+        }
+    }
+}
+
 fn draw_keypoints(mat: &Mat) -> Result<Mat, opencv::Error> {
-    let num_features = 1000;
+    let num_features = 100000;
     let mut gftt =
         <dyn opencv::features2d::GFTTDetector>::create(num_features, 0.01, 1.0, 3, false, 0.04)?;
     let mask = Mat::default();
     let mut keypoints = VectorOfKeyPoint::new();
     gftt.detect(&mat, &mut keypoints, &mask)?;
+
+    debug!("max features: {}", gftt.get_max_features()?);
+    debug!("num keypoints: {}", keypoints.len());
+    //println!("{:#?}", keypoints);
+    //for kp in keypoints.iter() {}
+
+    let mut frame = Frame::new();
+    for kp in keypoints.iter() {
+        frame.left_features.push(Feature::new(&kp));
+    }
 
     let mut out_image = Mat::default();
     opencv::features2d::draw_keypoints(
@@ -47,7 +84,7 @@ pub fn image_vector(
     vec.push(k_img2);
 
     opencv::core::hconcat(&vec, &mut lr_img).unwrap();
-    println!("hcon w: {}, h: {}", lr_img.cols(), lr_img.rows());
+    //println!("hcon w: {}, h: {}", lr_img.cols(), lr_img.rows());
 
     // resize
     let mut resized = opencv::core::Mat::default();
