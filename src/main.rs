@@ -1,3 +1,4 @@
+use cv_to_egui::FrontEnd;
 use eframe::egui::WidgetText;
 use eframe::epaint::{Color32, ColorImage};
 //use std::fs;
@@ -14,7 +15,9 @@ use env_logger;
 use log::{debug, error, info, warn};
 use std::env;
 
+//mod camera;
 mod cv_to_egui;
+//mod kitti_dataset;
 
 struct SharedData {
     seq_dir_path: std::path::PathBuf,
@@ -22,6 +25,7 @@ struct SharedData {
     img_index: usize,
     retained_image: RetainedImage,
     status_text: String,
+    frontend: cv_to_egui::FrontEnd,
 }
 
 impl SharedData {
@@ -38,11 +42,12 @@ impl SharedData {
             img_index: 0,
             retained_image: RetainedImage::from_color_image("", black_image),
             status_text: "none".to_string(),
+            frontend: cv_to_egui::FrontEnd::new(),
         }
     }
 
-    fn previous_frame(&mut self) {
-        self.img_index = self.img_index.checked_sub(1).unwrap_or(self.img_index);
+    fn reset(&mut self) {
+        self.img_index = 0;
     }
 
     fn next_frame(&mut self) {
@@ -51,18 +56,25 @@ impl SharedData {
 
     fn update(&mut self) {
         self.cnt += 1;
-        match cv_to_egui::image_vector(
-            self.seq_dir_path
-                .join("image_0")
-                .join(format!("{:06}.png", self.img_index))
-                .to_str()
-                .unwrap(),
-            self.seq_dir_path
-                .join("image_1")
-                .join(format!("{:06}.png", self.img_index))
-                .to_str()
-                .unwrap(),
-        ) {
+
+        let left_image_path = self
+            .seq_dir_path
+            .join("image_0")
+            .join(format!("{:06}.png", self.img_index));
+        let right_image_path = self
+            .seq_dir_path
+            .join("image_1")
+            .join(format!("{:06}.png", self.img_index));
+        let current_frame = cv_to_egui::Frame::new(
+            left_image_path.to_str().unwrap(),
+            right_image_path.to_str().unwrap(),
+        );
+
+        self.frontend.addFrame(&current_frame);
+        self.frontend.track();
+        let img = self.frontend.getImage().unwrap();
+
+        match cv_to_egui::image_vector(&img) {
             Ok(v) => {
                 self.retained_image = RetainedImage::from_image_bytes("img", &v.as_slice()).unwrap()
             }
@@ -186,8 +198,8 @@ impl eframe::App for MyApp {
                 ui.horizontal(|ui| {
                     let mut guard = self.shared_data_arc.lock().expect("Couldn't get lock");
                     let mut reload = false;
-                    if ui.button("previous frame").clicked() {
-                        guard.previous_frame();
+                    if ui.button("reset").clicked() {
+                        guard.reset();
                         reload = true;
                     }
                     if ui.button("next frame").clicked() {
