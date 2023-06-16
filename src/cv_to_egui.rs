@@ -10,10 +10,8 @@ use opencv::types::VectorOfKeyPoint;
 
 use opencv::core::KeyPoint;
 
-use env_logger;
 use log::debug;
 use opencv::types::VectorOfPoint2f;
-use opencv::types::VectorOfVectorOfPoint2f;
 
 pub struct FrontEnd {
     last_frame: Option<Frame>,
@@ -27,7 +25,7 @@ impl FrontEnd {
             current_frame: None,
         }
     }
-    pub fn addFrame(&mut self, new_frame: &Frame) {
+    pub fn add_frame(&mut self, new_frame: &Frame) {
         self.last_frame = self.current_frame.clone();
         self.current_frame = Some(new_frame.clone());
     }
@@ -75,8 +73,8 @@ impl FrontEnd {
         debug!("{:?}", status);
     }
 
-    pub fn getImage(&mut self) -> Result<Mat, opencv::Error> {
-        let mut current_frame = self.current_frame.as_mut().unwrap();
+    pub fn get_image(&mut self) -> Result<Mat, opencv::Error> {
+        let current_frame = self.current_frame.as_mut().unwrap();
         current_frame.find_keypoints();
 
         //    let mut rgb_img2 = opencv::core::Mat::default();

@@ -15,64 +15,57 @@ use env_logger;
 use log::{debug, error, info, warn};
 use std::env;
 
-//mod camera;
+mod camera;
 mod cv_to_egui;
-//mod kitti_dataset;
+mod kitti_dataset;
 
 struct SharedData {
     seq_dir_path: std::path::PathBuf,
     cnt: i32,
-    img_index: usize,
     retained_image: RetainedImage,
     status_text: String,
     frontend: cv_to_egui::FrontEnd,
+    kitti_dataset: kitti_dataset::KITTIDataset,
 }
 
 impl SharedData {
     fn new(cnt: i32) -> Self {
         let seq_dir_path = std::path::PathBuf::from(
-            "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/00",
+            "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05",
         );
 
         let black = Color32::from_rgb(255, 255, 255);
         let black_image = ColorImage::new([2482, 376], black);
         SharedData {
-            seq_dir_path: seq_dir_path,
+            seq_dir_path: seq_dir_path.clone(),
             cnt: cnt,
-            img_index: 0,
             retained_image: RetainedImage::from_color_image("", black_image),
             status_text: "none".to_string(),
             frontend: cv_to_egui::FrontEnd::new(),
+            kitti_dataset: kitti_dataset::KITTIDataset::new(seq_dir_path.clone()),
         }
-    }
-
-    fn reset(&mut self) {
-        self.img_index = 0;
-    }
-
-    fn next_frame(&mut self) {
-        self.img_index += 1;
     }
 
     fn update(&mut self) {
         self.cnt += 1;
 
+        let img_index = self.kitti_dataset.get_img_index();
         let left_image_path = self
             .seq_dir_path
             .join("image_0")
-            .join(format!("{:06}.png", self.img_index));
+            .join(format!("{:06}.png", img_index));
         let right_image_path = self
             .seq_dir_path
             .join("image_1")
-            .join(format!("{:06}.png", self.img_index));
+            .join(format!("{:06}.png", img_index));
         let current_frame = cv_to_egui::Frame::new(
             left_image_path.to_str().unwrap(),
             right_image_path.to_str().unwrap(),
         );
 
-        self.frontend.addFrame(&current_frame);
+        self.frontend.add_frame(&current_frame);
         self.frontend.track();
-        let img = self.frontend.getImage().unwrap();
+        let img = self.frontend.get_image().unwrap();
 
         match cv_to_egui::image_vector(&img) {
             Ok(v) => {
@@ -87,9 +80,11 @@ impl SharedData {
 async fn main() {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
+
     let (tx, rx) = mpsc::channel();
 
     let mut shared_data = SharedData::new(0);
+    //return;
     shared_data.update();
     let shared_arc = Arc::new(Mutex::new(shared_data));
     //let shared_arc_main = Arc::clone(&shared_arc);
@@ -170,7 +165,9 @@ impl eframe::App for MyApp {
                     ui.end_row();
 
                     ui.label("Image Index");
-                    ui.label(WidgetText::from(guard.img_index.to_string().as_str()));
+                    ui.label(WidgetText::from(
+                        guard.kitti_dataset.get_img_index().to_string().as_str(),
+                    ));
                     ui.end_row();
 
                     ui.label("Loading Progress");
@@ -199,11 +196,11 @@ impl eframe::App for MyApp {
                     let mut guard = self.shared_data_arc.lock().expect("Couldn't get lock");
                     let mut reload = false;
                     if ui.button("reset").clicked() {
-                        guard.reset();
+                        guard.kitti_dataset.reset();
                         reload = true;
                     }
                     if ui.button("next frame").clicked() {
-                        guard.next_frame();
+                        guard.kitti_dataset.next_frame();
                         reload = true;
                     }
                     if reload {
