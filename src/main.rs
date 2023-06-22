@@ -1,4 +1,3 @@
-use cv_to_egui::FrontEnd;
 use eframe::egui::WidgetText;
 use eframe::epaint::{Color32, ColorImage};
 //use std::fs;
@@ -17,6 +16,8 @@ use std::env;
 
 mod camera;
 mod cv_to_egui;
+mod frame;
+mod frontend;
 mod kitti_dataset;
 
 struct SharedData {
@@ -24,7 +25,7 @@ struct SharedData {
     cnt: i32,
     retained_image: RetainedImage,
     status_text: String,
-    frontend: cv_to_egui::FrontEnd,
+    frontend: frontend::FrontEnd,
     kitti_dataset: kitti_dataset::KITTIDataset,
 }
 
@@ -33,6 +34,10 @@ impl SharedData {
         let seq_dir_path = std::path::PathBuf::from(
             "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05",
         );
+        let dataset = kitti_dataset::KITTIDataset::new(seq_dir_path.clone());
+
+        let mut frontend = frontend::FrontEnd::new();
+        frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
 
         let black = Color32::from_rgb(255, 255, 255);
         let black_image = ColorImage::new([2482, 376], black);
@@ -41,30 +46,15 @@ impl SharedData {
             cnt: cnt,
             retained_image: RetainedImage::from_color_image("", black_image),
             status_text: "none".to_string(),
-            frontend: cv_to_egui::FrontEnd::new(),
-            kitti_dataset: kitti_dataset::KITTIDataset::new(seq_dir_path.clone()),
+            frontend: frontend,
+            kitti_dataset: dataset,
         }
     }
 
     fn update(&mut self) {
         self.cnt += 1;
 
-        let img_index = self.kitti_dataset.get_img_index();
-        let left_image_path = self
-            .seq_dir_path
-            .join("image_0")
-            .join(format!("{:06}.png", img_index));
-        let right_image_path = self
-            .seq_dir_path
-            .join("image_1")
-            .join(format!("{:06}.png", img_index));
-        let current_frame = cv_to_egui::Frame::new(
-            left_image_path.to_str().unwrap(),
-            right_image_path.to_str().unwrap(),
-        );
-
-        self.frontend.add_frame(&current_frame);
-        self.frontend.track();
+        self.frontend.update(&self.kitti_dataset.get_frame());
         let img = self.frontend.get_image().unwrap();
 
         match cv_to_egui::image_vector(&img) {

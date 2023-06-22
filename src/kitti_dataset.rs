@@ -1,5 +1,7 @@
-use crate::camera::Camera;
+use crate::camera::{self, Camera};
+use crate::frame::Frame;
 use log::debug;
+use std::rc::Rc;
 use std::{fmt::Debug, io};
 
 pub struct KITTIDataset {
@@ -58,6 +60,25 @@ impl KITTIDataset {
             cameras: cameras,
             img_index: 0,
         }
+    }
+
+    pub fn get_frame(&self) -> Frame {
+        let left_image_path = self
+            .dataset_path
+            .join("image_0")
+            .join(format!("{:06}.png", self.img_index));
+        let right_image_path = self
+            .dataset_path
+            .join("image_1")
+            .join(format!("{:06}.png", self.img_index));
+        Frame::new(
+            left_image_path.to_str().unwrap(),
+            right_image_path.to_str().unwrap(),
+        )
+    }
+
+    pub fn get_camera(&self, index: usize) -> Rc<Camera> {
+        Rc::new(self.cameras[index])
     }
 
     pub fn get_img_index(&self) -> usize {
