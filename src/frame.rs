@@ -74,12 +74,13 @@ impl Frame {
             self.left_features.push(Feature::new(&kp));
         }
 
-        let right_kps = detect_features(&self.right_image, &Some(&self.left_features)).unwrap();
-
-        detect_feature_movement(&self.left_features, &self.left_image, &self.right_image);
+        let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features)).unwrap();
+        let right_kps =
+            detect_feature_movement(&self.left_features, &self.left_image, &self.right_image);
+        for kp in right_kps.unwrap().iter() {}
 
         self.left_image_kps = draw_keypoints(&self.left_image, &left_kps).unwrap();
-        self.right_image_kps = draw_keypoints(&self.right_image, &right_kps).unwrap();
+        self.right_image_kps = draw_keypoints(&self.right_image, &right_kps_img).unwrap();
     }
 }
 
@@ -127,7 +128,7 @@ fn detect_feature_movement(
     features: &Vec<Feature>,
     mat1: &Mat,
     mat2: &Mat,
-) -> Result<Vec<Feature>, opencv::Error> {
+) -> Result<Vec<Option<Feature>>, opencv::Error> {
     // prepare float keypoints for optical-flow
     let mut fkps1 = VectorOfPoint2f::new();
     let mut fkps2 = VectorOfPoint2f::new();
@@ -158,15 +159,23 @@ fn detect_feature_movement(
         1e-4,
     );
 
+    let mut features = Vec::new();
     let mut cnt = 0;
-    for s in status.iter() {
+    for i in 0..status.len() {
+        let s = status.get(i).unwrap();
         if s > 0 {
             cnt += 1;
+            let kp = fkps2.get(i).unwrap();
+            features.push(Some(Feature::new(
+                &KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1).unwrap(),
+            )));
+        } else {
+            features.push(None);
         }
     }
     debug!("number of keypoints in right image: {}", cnt);
 
-    Ok(Vec::new())
+    Ok(features)
 }
 
 fn draw_keypoints(mat: &Mat, keypoints: &VectorOfKeyPoint) -> Result<Mat, opencv::Error> {
