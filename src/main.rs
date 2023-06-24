@@ -10,12 +10,13 @@ use eframe::egui;
 use egui_extras::RetainedImage;
 use tokio;
 
+use anyhow::Result;
 use env_logger;
-use log::{debug, error, info, warn};
 use std::env;
 
 mod camera;
 mod cv_to_egui;
+mod error;
 mod frame;
 mod frontend;
 mod kitti_dataset;
@@ -51,11 +52,12 @@ impl SharedData {
         }
     }
 
-    fn update(&mut self) {
+    fn update(&mut self) -> Result<()> {
         self.cnt += 1;
 
-        self.frontend.update(&self.kitti_dataset.get_frame());
-        let img = self.frontend.get_image().unwrap();
+        let new_frame = self.kitti_dataset.get_frame()?;
+        self.frontend.update(&new_frame)?;
+        let img = self.frontend.get_image()?;
 
         match cv_to_egui::image_vector(&img) {
             Ok(v) => {
@@ -63,11 +65,13 @@ impl SharedData {
             }
             Err(..) => self.status_text = "image update failed".to_string(),
         }
+
+        Ok(())
     }
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
 
@@ -75,7 +79,7 @@ async fn main() {
 
     let mut shared_data = SharedData::new(0);
     //return;
-    shared_data.update();
+    shared_data.update()?;
     let shared_arc = Arc::new(Mutex::new(shared_data));
     //let shared_arc_main = Arc::clone(&shared_arc);
     let app = MyApp::new(tx, shared_arc);
@@ -105,6 +109,7 @@ async fn main() {
         Ok(_) => (),
         Err(_) => (),
     }
+    Ok(())
 }
 
 struct MyApp {
@@ -182,7 +187,7 @@ impl eframe::App for MyApp {
             });
             egui::containers::TopBottomPanel::bottom(egui::Id::new("other")).show(ctx, |ui| {
                 ui.heading("Control");
-                ui.horizontal(|ui| {
+                ui.horizontal(|ui| -> Result<()> {
                     let mut guard = self.shared_data_arc.lock().expect("Couldn't get lock");
                     let mut reload = false;
                     if ui.button("reset").clicked() {
@@ -194,8 +199,9 @@ impl eframe::App for MyApp {
                         reload = true;
                     }
                     if reload {
-                        guard.update();
+                        guard.update()?;
                     }
+                    Ok(())
                 });
 
                 ui.group(|ui| {

@@ -23,7 +23,7 @@ impl Feature {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Frame {
     pub left_image: Mat,
     pub right_image: Mat,
@@ -33,54 +33,49 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(left_img_path: &str, right_img_path: &str) -> Frame {
-        let left_img =
-            imgcodecs::imread(left_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE).unwrap();
-        let right_img =
-            imgcodecs::imread(right_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE).unwrap();
+    pub fn load_image(
+        mut self,
+        left_img_path: &str,
+        right_img_path: &str,
+    ) -> Result<Self, opencv::Error> {
+        let left_img = imgcodecs::imread(left_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
+        let right_img = imgcodecs::imread(right_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
 
-        let mut left_resized = opencv::core::Mat::default();
-        let mut right_resized = opencv::core::Mat::default();
         opencv::imgproc::resize(
             &left_img,
-            &mut left_resized,
+            &mut self.left_image,
             opencv::core::Size::new(0, 0),
             0.5,
             0.5,
             opencv::imgproc::INTER_NEAREST,
-        )
-        .unwrap();
+        )?;
         opencv::imgproc::resize(
             &right_img,
-            &mut right_resized,
+            &mut self.right_image,
             opencv::core::Size::new(0, 0),
             0.5,
             0.5,
             opencv::imgproc::INTER_NEAREST,
-        )
-        .unwrap();
-        Frame {
-            left_image: left_resized,
-            right_image: right_resized,
-            left_features: Vec::new(),
-            left_image_kps: Mat::default(),
-            right_image_kps: Mat::default(),
-        }
+        )?;
+
+        Ok(self)
     }
 
-    pub fn find_keypoints(&mut self) {
-        let left_kps = detect_features(&self.left_image, &None).unwrap();
+    pub fn find_keypoints(&mut self) -> Result<(), opencv::Error> {
+        let left_kps = detect_features(&self.left_image, &None)?;
         for kp in left_kps.iter() {
             self.left_features.push(Feature::new(&kp));
         }
 
-        let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features)).unwrap();
+        let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features))?;
         let right_kps =
-            detect_feature_movement(&self.left_features, &self.left_image, &self.right_image);
-        for kp in right_kps.unwrap().iter() {}
+            detect_feature_movement(&self.left_features, &self.left_image, &self.right_image)?;
+        for kp in right_kps.iter() {}
 
-        self.left_image_kps = draw_keypoints(&self.left_image, &left_kps).unwrap();
-        self.right_image_kps = draw_keypoints(&self.right_image, &right_kps_img).unwrap();
+        self.left_image_kps = draw_keypoints(&self.left_image, &left_kps)?;
+        self.right_image_kps = draw_keypoints(&self.right_image, &right_kps_img)?;
+
+        Ok(())
     }
 }
 
@@ -91,15 +86,11 @@ fn detect_features(
     let num_features = 150;
     let mut gftt =
         <dyn opencv::features2d::GFTTDetector>::create(num_features, 0.01, 20.0, 3, false, 0.04)?;
-    let sz = mat.size().unwrap();
-    let mut mask = unsafe {
-        Mat::new_size_with_default(
-            sz,
-            opencv::core::CV_8UC1,
-            opencv::core::Scalar::new(255.0, 255.0, 255.0, 255.0),
-        )
-    }
-    .unwrap();
+    let mut mask = Mat::new_size_with_default(
+        mat.size().unwrap_or_default(),
+        opencv::core::CV_8UC1,
+        opencv::core::Scalar::new(255.0, 255.0, 255.0, 255.0),
+    )?;
     if let Some(features) = features {
         for f in features.iter() {
             let p1 = f.position.pt - Point2f::new(10.0, 10.0);
@@ -153,22 +144,21 @@ fn detect_feature_movement(
                 + opencv::core::TermCriteria_Type::EPS as i32,
             30,
             0.01,
-        )
-        .unwrap(),
+        )?,
         opencv::video::OPTFLOW_USE_INITIAL_FLOW,
         1e-4,
-    );
+    )?;
 
     let mut features = Vec::new();
     let mut cnt = 0;
     for i in 0..status.len() {
-        let s = status.get(i).unwrap();
+        let s = status.get(i)?;
         if s > 0 {
             cnt += 1;
-            let kp = fkps2.get(i).unwrap();
-            features.push(Some(Feature::new(
-                &KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1).unwrap(),
-            )));
+            let kp = fkps2.get(i)?;
+            features.push(Some(Feature::new(&KeyPoint::new_point(
+                kp, 7.0, -1.0, 0.0, 0, -1,
+            )?)));
         } else {
             features.push(None);
         }

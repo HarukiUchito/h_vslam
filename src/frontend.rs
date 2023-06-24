@@ -1,9 +1,10 @@
 use std::rc::Rc;
 
 use crate::camera::Camera;
+use crate::error::SLAMError;
 use crate::frame::Frame;
+use anyhow::Result;
 
-use opencv::core;
 use opencv::core::Mat;
 use opencv::imgproc::INTER_LINEAR;
 
@@ -40,38 +41,45 @@ impl FrontEnd {
         self.right_camera = Some(right_camera);
     }
 
-    pub fn initialize(&mut self) {
-        if self.left_camera.is_none() || self.right_camera.is_none() {
-            log::error!("set camera object before initialization");
-            return;
-        }
-        let Some(current_frame) = self.current_frame.as_mut() else { return };
-        current_frame.find_keypoints();
-    }
-
-    pub fn update(&mut self, new_frame: &Frame) {
+    pub fn update(&mut self, new_frame: &Frame) -> Result<()> {
         debug!("[frontend update]");
         debug!("status: {:?}", self.status);
         self.last_frame = self.current_frame.clone();
         self.current_frame = Some(new_frame.clone());
         match self.status {
             FrontendStatus::INITIALIZATION => {
-                self.initialize();
+                self.initialize()?;
                 self.status = FrontendStatus::TRACKING;
             }
             FrontendStatus::TRACKING => self.track(),
             FrontendStatus::LOST => (),
         }
+        Ok(())
+    }
+
+    fn initialize(&mut self) -> Result<()> {
+        if self.left_camera.is_none() || self.right_camera.is_none() {
+            return Err(SLAMError::new("set camera object before initialization").into());
+        }
+        let current_frame = self
+            .current_frame
+            .as_mut()
+            .ok_or(SLAMError::new("set frame before initialization"))?;
+        current_frame.find_keypoints()?;
+
+        Ok(())
     }
 
     fn track(&self) {
-        let Some(last_frame) = self.last_frame.as_ref() else { return };
-        let Some(current_frame) = self.current_frame.as_ref() else { return };
+        unimplemented!();
     }
 
-    pub fn get_image(&mut self) -> Result<Mat, opencv::Error> {
-        let current_frame = self.current_frame.as_mut().unwrap();
-        current_frame.find_keypoints();
+    pub fn get_image(&mut self) -> Result<Mat> {
+        let current_frame = self
+            .current_frame
+            .as_mut()
+            .ok_or(SLAMError::new("set frame before get_image"))?;
+        current_frame.find_keypoints()?;
 
         //    let mut rgb_img2 = opencv::core::Mat::default();
         //    opencv::imgproc::cvt_color(&img2, &mut rgb_img2, opencv::imgproc::COLOR_GRAY2RGB, 0)?;
@@ -82,7 +90,7 @@ impl FrontEnd {
         vec.push(current_frame.left_image_kps.clone());
         vec.push(current_frame.right_image_kps.clone());
 
-        opencv::core::hconcat(&vec, &mut lr_img).unwrap();
+        opencv::core::hconcat(&vec, &mut lr_img)?;
         //println!("hcon w: {}, h: {}", lr_img.cols(), lr_img.rows());
 
         // resize

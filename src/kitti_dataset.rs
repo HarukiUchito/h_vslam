@@ -62,7 +62,7 @@ impl KITTIDataset {
         }
     }
 
-    pub fn get_frame(&self) -> Frame {
+    pub fn get_frame(&self) -> Result<Frame, opencv::Error> {
         let left_image_path = self
             .dataset_path
             .join("image_0")
@@ -71,10 +71,11 @@ impl KITTIDataset {
             .dataset_path
             .join("image_1")
             .join(format!("{:06}.png", self.img_index));
-        Frame::new(
+        let frame = Frame::default().load_image(
             left_image_path.to_str().unwrap(),
             right_image_path.to_str().unwrap(),
-        )
+        )?;
+        Ok(frame)
     }
 
     pub fn get_camera(&self, index: usize) -> Rc<Camera> {
