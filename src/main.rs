@@ -35,7 +35,8 @@ impl SharedData {
         let seq_dir_path = std::path::PathBuf::from(
             "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05",
         );
-        let dataset = kitti_dataset::KITTIDataset::new(seq_dir_path.clone());
+        let mut dataset = kitti_dataset::KITTIDataset::new(seq_dir_path.clone());
+        dataset.load_calib_file();
 
         let mut frontend = frontend::FrontEnd::new();
         frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
