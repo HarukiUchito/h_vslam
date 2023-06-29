@@ -20,6 +20,8 @@ mod error;
 mod frame;
 mod frontend;
 mod kitti_dataset;
+mod map;
+mod map_point;
 
 struct SharedData {
     seq_dir_path: std::path::PathBuf,

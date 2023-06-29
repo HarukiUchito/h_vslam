@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use opencv::core::Mat;
 use opencv::core::Point2f;
 use opencv::core::Scalar;
@@ -15,6 +17,8 @@ use log::debug;
 
 use crate::error::SLAMError;
 use crate::kitti_dataset;
+use crate::map::Map;
+use crate::map_point::MapPoint;
 
 #[derive(Clone)]
 pub struct Feature {
@@ -31,7 +35,8 @@ impl Feature {
 pub struct Frame {
     pub left_image: Mat,
     pub right_image: Mat,
-    pub left_features: Vec<Feature>,
+    pub left_features: Vec<Rc<Feature>>,
+    pub right_features: Vec<Option<Rc<Feature>>>,
     pub left_image_kps: Mat,
     pub right_image_kps: Mat,
 }
@@ -68,14 +73,14 @@ impl Frame {
     pub fn find_keypoints(&mut self) -> Result<(), opencv::Error> {
         let left_kps = detect_features(&self.left_image, &None)?;
         for kp in left_kps.iter() {
-            self.left_features.push(Feature::new(&kp));
+            self.left_features.push(Rc::new(Feature::new(&kp)));
         }
 
         let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features))?;
-        let right_features =
+        self.right_features =
             detect_feature_movement(&self.left_features, &self.left_image, &self.right_image)?;
 
-        assert!(self.left_features.len() == right_features.len());
+        assert!(self.left_features.len() == self.right_features.len());
 
         self.left_image_kps = draw_keypoints(&self.left_image, &left_kps)?;
         self.right_image_kps = draw_keypoints(&self.right_image, &right_kps_img)?;
@@ -86,7 +91,7 @@ impl Frame {
 
 fn detect_features(
     mat: &Mat,
-    features: &Option<&Vec<Feature>>,
+    features: &Option<&Vec<Rc<Feature>>>,
 ) -> Result<VectorOfKeyPoint, opencv::Error> {
     let num_features = 150;
     let mut gftt =
@@ -121,10 +126,10 @@ fn detect_features(
 }
 
 fn detect_feature_movement(
-    features: &Vec<Feature>,
+    features: &Vec<Rc<Feature>>,
     mat1: &Mat,
     mat2: &Mat,
-) -> Result<Vec<Option<Feature>>, opencv::Error> {
+) -> Result<Vec<Option<Rc<Feature>>>, opencv::Error> {
     // prepare float keypoints for optical-flow
     let mut fkps1 = VectorOfPoint2f::new();
     let mut fkps2 = VectorOfPoint2f::new();
@@ -161,9 +166,9 @@ fn detect_feature_movement(
         if s > 0 {
             cnt += 1;
             let kp = fkps2.get(i)?;
-            features.push(Some(Feature::new(&KeyPoint::new_point(
+            features.push(Some(Rc::new(Feature::new(&KeyPoint::new_point(
                 kp, 7.0, -1.0, 0.0, 0, -1,
-            )?)));
+            )?))));
         } else {
             features.push(None);
         }
@@ -243,19 +248,8 @@ fn test_triangulation() -> Result<()> {
     let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
     dataset.load_calib_file()?;
 
-    let first_frame = dataset.get_frame()?;
-    let left_kps = detect_features(&first_frame.left_image, &None)?;
-
-    let mut left_features = Vec::new();
-    for kp in left_kps.iter() {
-        left_features.push(Feature::new(&kp));
-    }
-
-    let right_features = detect_feature_movement(
-        &left_features,
-        &first_frame.left_image,
-        &first_frame.right_image,
-    )?;
+    let mut first_frame = dataset.get_frame()?;
+    first_frame.find_keypoints()?;
 
     let left_camera = *dataset.get_camera(0).as_ref();
     let right_camera = *dataset.get_camera(1).as_ref();
@@ -264,8 +258,8 @@ fn test_triangulation() -> Result<()> {
 
     let index = 0; // just check triangulation result for the first feature
 
-    let f_left = &left_features[index];
-    let f_right = match &right_features[index] {
+    let f_left = &first_frame.left_features[index];
+    let f_right = match &first_frame.right_features[index] {
         None => return Err(SLAMError::new("corresponding right-side feature not found").into()),
         Some(f) => f,
     };
@@ -302,29 +296,20 @@ fn test_map_initialization() -> Result<()> {
     let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
     dataset.load_calib_file()?;
 
-    let first_frame = dataset.get_frame()?;
-    let left_kps = detect_features(&first_frame.left_image, &None)?;
-
-    let mut left_features = Vec::new();
-    for kp in left_kps.iter() {
-        left_features.push(Feature::new(&kp));
-    }
-
-    let right_features = detect_feature_movement(
-        &left_features,
-        &first_frame.left_image,
-        &first_frame.right_image,
-    )?;
+    let mut first_frame = dataset.get_frame()?;
+    first_frame.find_keypoints()?;
 
     let left_camera = *dataset.get_camera(0).as_ref();
     let right_camera = *dataset.get_camera(1).as_ref();
 
     let poses = vec![left_camera.pose, right_camera.pose];
 
+    let mut map = Map::new();
+
     let mut num_landmarks = 0;
-    for i in 0..left_features.len() {
-        let f_left = &left_features[i];
-        let f_right = match &right_features[i] {
+    for i in 0..first_frame.left_features.len() {
+        let f_left = &first_frame.left_features[i];
+        let f_right = match &first_frame.right_features[i] {
             None => continue,
             Some(f) => f,
         };
@@ -343,7 +328,11 @@ fn test_map_initialization() -> Result<()> {
         ];
 
         if let Ok(pt_world) = triangulation(&poses, &points) {
+            println!("ptw: {}", pt_world);
             num_landmarks += 1;
+            let new_id = map.add_new_map_point(&pt_world);
+            map.add_observation(new_id, f_left)?;
+            map.add_observation(new_id, f_right)?;
         }
     }
     println!("initial map created with {} map points", num_landmarks);
