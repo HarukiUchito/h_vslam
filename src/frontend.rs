@@ -23,6 +23,7 @@ pub struct FrontEnd {
     current_frame: Option<Frame>,
     left_camera: Option<Rc<Camera>>,
     right_camera: Option<Rc<Camera>>,
+    image_output: Mat,
 }
 
 impl FrontEnd {
@@ -33,6 +34,7 @@ impl FrontEnd {
             current_frame: None,
             left_camera: None,
             right_camera: None,
+            image_output: Mat::default(),
         }
     }
 
@@ -51,9 +53,37 @@ impl FrontEnd {
                 self.initialize()?;
                 self.status = FrontendStatus::TRACKING;
             }
-            FrontendStatus::TRACKING => self.track(),
+            FrontendStatus::TRACKING => (), //self.track(),
             FrontendStatus::LOST => (),
         }
+
+        let current_frame = self
+            .current_frame
+            .as_mut()
+            .ok_or(SLAMError::new("set frame before get_image"))?;
+        current_frame.find_keypoints()?;
+
+        //    let mut rgb_img2 = opencv::core::Mat::default();
+        //    opencv::imgproc::cvt_color(&img2, &mut rgb_img2, opencv::imgproc::COLOR_GRAY2RGB, 0)?;
+
+        // concat left, right images
+        let mut lr_img = opencv::core::Mat::default();
+        let mut vec = opencv::types::VectorOfMat::new();
+        vec.push(current_frame.left_image_kps.clone());
+        vec.push(current_frame.right_image_kps.clone());
+
+        opencv::core::hconcat(&vec, &mut lr_img)?;
+        //println!("hcon w: {}, h: {}", lr_img.cols(), lr_img.rows());
+
+        // resize
+        opencv::imgproc::resize(
+            &lr_img,
+            &mut self.image_output,
+            opencv::core::Size::new(0, 0),
+            0.8,
+            0.8,
+            INTER_LINEAR,
+        )?;
         Ok(())
     }
 
@@ -74,36 +104,7 @@ impl FrontEnd {
         unimplemented!();
     }
 
-    pub fn get_image(&mut self) -> Result<Mat> {
-        let current_frame = self
-            .current_frame
-            .as_mut()
-            .ok_or(SLAMError::new("set frame before get_image"))?;
-        current_frame.find_keypoints()?;
-
-        //    let mut rgb_img2 = opencv::core::Mat::default();
-        //    opencv::imgproc::cvt_color(&img2, &mut rgb_img2, opencv::imgproc::COLOR_GRAY2RGB, 0)?;
-
-        // concat left, right images
-        let mut lr_img = opencv::core::Mat::default();
-        let mut vec = opencv::types::VectorOfMat::new();
-        vec.push(current_frame.left_image_kps.clone());
-        vec.push(current_frame.right_image_kps.clone());
-
-        opencv::core::hconcat(&vec, &mut lr_img)?;
-        //println!("hcon w: {}, h: {}", lr_img.cols(), lr_img.rows());
-
-        // resize
-        let mut resized = opencv::core::Mat::default();
-        opencv::imgproc::resize(
-            &lr_img,
-            &mut resized,
-            opencv::core::Size::new(0, 0),
-            0.8,
-            0.8,
-            INTER_LINEAR,
-        )?;
-
-        Ok(resized)
+    pub fn get_image(&self) -> Result<Mat> {
+        Ok(self.image_output.clone())
     }
 }
