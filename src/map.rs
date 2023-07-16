@@ -1,16 +1,20 @@
 use anyhow::Result;
-use std::{collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::{error::SLAMError, frame::Feature, map_point::MapPoint};
+use crate::{error::SLAMError, frame::Feature, frame::Frame, map_point::MapPoint};
 
 pub struct Map {
     landmarks: HashMap<usize, MapPoint>, // id -> MapPoint
+    keyframes: HashMap<usize, Rc<RefCell<Frame>>>,
+    current_frame: Option<Rc<RefCell<Frame>>>,
 }
 
 impl Map {
     pub fn new() -> Map {
         Map {
             landmarks: HashMap::new(),
+            keyframes: HashMap::new(),
+            current_frame: None,
         }
     }
 
@@ -29,5 +33,12 @@ impl Map {
             }
             None => Err(SLAMError::new("no corresponding landmark").into()),
         }
+    }
+
+    pub fn add_keyframe(&mut self, frame: &Rc<RefCell<Frame>>) -> Result<()> {
+        self.current_frame = Some(Rc::clone(frame));
+        self.keyframes
+            .insert(frame.borrow().key_frame_id, Rc::clone(frame));
+        Ok(())
     }
 }

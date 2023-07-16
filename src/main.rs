@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -28,7 +30,7 @@ async fn main() -> Result<()> {
     let mut frontend = frontend::FrontEnd::new();
     frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
     let new_frame = dataset.get_frame()?;
-    frontend.update(&new_frame)?;
+    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
 
     let dataset_arc = Arc::new(Mutex::new(dataset));
 
@@ -67,7 +69,7 @@ async fn main() -> Result<()> {
     let dataset_arc1 = Arc::clone(&dataset_arc);
     loop {
         let new_frame = dataset_arc1.lock().unwrap().get_frame()?;
-        frontend.update(&new_frame)?;
+        frontend.update(&Rc::new(RefCell::new(new_frame)))?;
 
         i += 1;
         timer.tick().await?;
