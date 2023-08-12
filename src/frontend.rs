@@ -27,7 +27,7 @@ pub struct FrontEnd {
     left_camera: Option<Rc<Camera>>,
     right_camera: Option<Rc<Camera>>,
     image_output: Mat,
-    map: Map,
+    pub map: Map,
 }
 
 impl FrontEnd {

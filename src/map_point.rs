@@ -4,7 +4,7 @@ use crate::frame::Feature;
 
 pub struct MapPoint {
     id: usize,
-    position: yakf::linalg::Vector3<f64>,
+    pub position: yakf::linalg::Vector3<f64>,
     observations: Vec<Rc<Feature>>,
 }
 

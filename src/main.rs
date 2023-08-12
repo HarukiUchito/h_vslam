@@ -60,6 +60,9 @@ async fn main() -> Result<()> {
     let pub2 =
         node.create_publisher::<r2r::sensor_msgs::msg::Image>("/img", QosProfile::default())?;
 
+    let pub3 =
+        node.create_publisher::<r2r::sensor_msgs::msg::PointCloud2>("/pcs", QosProfile::default())?;
+
     // following instantiation must be there for some reason [TODO]
     let handle = tokio::task::spawn_blocking(move || loop {
         node.spin_once(std::time::Duration::from_millis(100));
@@ -86,6 +89,23 @@ async fn main() -> Result<()> {
         img.height = fimg.rows() as u32;
         img.step = img.width * 8;
         pub2.publish(&img)?;
+
+        let mut cloud = Vec::new();
+        for lm in frontend.map.landmarks.values() {
+            cloud.push(ros_pointcloud2::pcl_utils::PointXYZ {
+                x: lm.position[0] as f32,
+                y: lm.position[1] as f32,
+                z: lm.position[2] as f32,
+            });
+        }
+        let internal_cloud: ros_pointcloud2::ros_types::PointCloud2Msg =
+            ros_pointcloud2::ConvertXYZ::try_from(cloud)
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let mut msg_cloud: r2r::sensor_msgs::msg::PointCloud2 = internal_cloud.into();
+        msg_cloud.header.frame_id = "map".to_string();
+        pub3.publish(&msg_cloud)?;
 
         pool.run_until_stalled();
     }

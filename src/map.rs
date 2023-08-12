@@ -4,7 +4,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use crate::{error::SLAMError, frame::Feature, frame::Frame, map_point::MapPoint};
 
 pub struct Map {
-    landmarks: HashMap<usize, MapPoint>, // id -> MapPoint
+    pub landmarks: HashMap<usize, MapPoint>, // id -> MapPoint
     keyframes: HashMap<usize, Rc<RefCell<Frame>>>,
     current_frame: Option<Rc<RefCell<Frame>>>,
 }
