@@ -99,6 +99,7 @@ impl KITTIDataset {
 
     pub fn next_frame(&mut self) {
         self.img_index += 1;
+        debug!("current img index: {}", self.img_index);
     }
 }
 

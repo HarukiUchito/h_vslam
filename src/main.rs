@@ -22,6 +22,8 @@ mod map_point;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     let seq_dir_path =
         std::path::PathBuf::from("/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05");
     let mut dataset = kitti_dataset::KITTIDataset::new(seq_dir_path.clone());
@@ -29,6 +31,9 @@ async fn main() -> Result<()> {
 
     let mut frontend = frontend::FrontEnd::new();
     frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
+    let new_frame = dataset.get_frame()?;
+    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+    dataset.next_frame();
     let new_frame = dataset.get_frame()?;
     frontend.update(&Rc::new(RefCell::new(new_frame)))?;
 

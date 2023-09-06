@@ -1,9 +1,11 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use opencv::core::Mat;
 use opencv::core::Point2f;
 use opencv::core::Scalar;
 use opencv::features2d::*;
+use opencv::flann::feature_index;
 use opencv::imgcodecs;
 use opencv::prelude::Feature2DTrait;
 use opencv::prelude::MatTraitConstManual;
@@ -23,24 +25,52 @@ use crate::map_point::MapPoint;
 #[derive(Clone)]
 pub struct Feature {
     pub position: KeyPoint,
+    pub map_point_id: Option<usize>,
 }
 
 impl Feature {
     pub fn new(kp: &KeyPoint) -> Feature {
-        Feature { position: *kp }
+        Feature {
+            position: *kp,
+            map_point_id: None,
+        }
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Frame {
     pub left_image: Mat,
     pub right_image: Mat,
-    pub left_features: Vec<Rc<Feature>>,
-    pub right_features: Vec<Option<Rc<Feature>>>,
+
+    pub left_features: Vec<Rc<RefCell<Feature>>>,
+    pub right_features: Vec<Option<Rc<RefCell<Feature>>>>,
+
     pub left_image_kps: Mat,
     pub right_image_kps: Mat,
+
     pub key_frame_id: usize,
     pub is_key_frame: bool,
+
+    pub pose: yakf::lie::se3::SE3,
+}
+
+impl Default for Frame {
+    fn default() -> Frame {
+        Frame {
+            left_image: Mat::default(),
+            right_image: Mat::default(),
+            left_features: Vec::default(),
+            right_features: Vec::default(),
+            left_image_kps: Mat::default(),
+            right_image_kps: Mat::default(),
+            key_frame_id: 0,
+            is_key_frame: false,
+            pose: yakf::lie::se3::SE3::from_r_t(
+                yakf::linalg::Matrix3::from_vec(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+                yakf::linalg::Vector3::<f64>::new(0.0, 0.0, 0.0),
+            ),
+        }
+    }
 }
 
 impl Frame {
@@ -81,7 +111,8 @@ impl Frame {
     pub fn find_keypoints(&mut self) -> Result<(), opencv::Error> {
         let left_kps = detect_features(&self.left_image, &None)?;
         for kp in left_kps.iter() {
-            self.left_features.push(Rc::new(Feature::new(&kp)));
+            self.left_features
+                .push(Rc::new(RefCell::new(Feature::new(&kp))));
         }
 
         let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features))?;
@@ -99,7 +130,7 @@ impl Frame {
 
 fn detect_features(
     mat: &Mat,
-    features: &Option<&Vec<Rc<Feature>>>,
+    features: &Option<&Vec<Rc<RefCell<Feature>>>>,
 ) -> Result<VectorOfKeyPoint, opencv::Error> {
     let num_features = 150;
     let mut gftt =
@@ -111,6 +142,7 @@ fn detect_features(
     )?;
     if let Some(features) = features {
         for f in features.iter() {
+            let f = f.borrow();
             let p1 = f.position.pt - Point2f::new(10.0, 10.0);
             opencv::imgproc::rectangle(
                 &mut mask,
@@ -134,14 +166,15 @@ fn detect_features(
 }
 
 fn detect_feature_movement(
-    features: &Vec<Rc<Feature>>,
+    features: &Vec<Rc<RefCell<Feature>>>,
     mat1: &Mat,
     mat2: &Mat,
-) -> Result<Vec<Option<Rc<Feature>>>, opencv::Error> {
+) -> Result<Vec<Option<Rc<RefCell<Feature>>>>, opencv::Error> {
     // prepare float keypoints for optical-flow
     let mut fkps1 = VectorOfPoint2f::new();
     let mut fkps2 = VectorOfPoint2f::new();
     for kp in features.iter() {
+        let kp = kp.borrow();
         fkps1.push(kp.position.pt.clone()); // just push the keypoint in mat1
         fkps2.push(kp.position.pt);
     }
@@ -174,9 +207,9 @@ fn detect_feature_movement(
         if s > 0 {
             cnt += 1;
             let kp = fkps2.get(i)?;
-            features.push(Some(Rc::new(Feature::new(&KeyPoint::new_point(
-                kp, 7.0, -1.0, 0.0, 0, -1,
-            )?))));
+            features.push(Some(Rc::new(RefCell::new(Feature::new(
+                &KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1)?,
+            )))));
         } else {
             features.push(None);
         }

@@ -25,7 +25,7 @@ impl Map {
         new_id
     }
 
-    pub fn add_observation(&mut self, id: usize, obs: &Rc<Feature>) -> Result<()> {
+    pub fn add_observation(&mut self, id: usize, obs: &Rc<RefCell<Feature>>) -> Result<()> {
         match self.landmarks.get_mut(&id) {
             Some(l) => {
                 l.add_observation(Rc::clone(obs));

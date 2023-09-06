@@ -1,14 +1,16 @@
+use std::borrow::BorrowMut;
 use std::cell::RefCell;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 use crate::camera::Camera;
 use crate::error::SLAMError;
-use crate::frame::Frame;
+use crate::frame::{Feature, Frame};
 use crate::kitti_dataset;
 use crate::map::Map;
 use anyhow::Result;
 
-use opencv::core::Mat;
+use opencv::core::{KeyPoint, Mat, Point2f};
 use opencv::imgproc::INTER_LINEAR;
 
 use log::debug;
@@ -28,6 +30,8 @@ pub struct FrontEnd {
     right_camera: Option<Rc<Camera>>,
     image_output: Mat,
     pub map: Map,
+
+    relative_motion: yakf::lie::se3::SE3,
 }
 
 impl FrontEnd {
@@ -40,6 +44,10 @@ impl FrontEnd {
             right_camera: None,
             image_output: Mat::default(),
             map: Map::new(),
+            relative_motion: yakf::lie::se3::SE3::from_r_t(
+                yakf::linalg::Matrix3::from_vec(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+                yakf::linalg::Vector3::<f64>::new(0.0, 0.0, 0.0),
+            ),
         }
     }
 
@@ -57,17 +65,14 @@ impl FrontEnd {
         match self.status {
             FrontendStatus::INITIALIZATION => {
                 self.initialize()?;
-                self.status = FrontendStatus::TRACKING;
             }
-            FrontendStatus::TRACKING => (), //self.track(),
+            FrontendStatus::TRACKING => self.track(),
             FrontendStatus::LOST => (),
         }
 
-        let current_frame = self
-            .current_frame
-            .as_mut()
-            .ok_or(SLAMError::new("set frame before get_image"))?;
-        current_frame.borrow_mut().find_keypoints()?;
+        let current_frame = Rc::clone(new_frame);
+        //current_frame.deref().borrow_mut().find_keypoints()?;
+        //current_frame.ok_or(SLAMError::new("set frame before get_image"))?;
 
         //    let mut rgb_img2 = opencv::core::Mat::default();
         //    opencv::imgproc::cvt_color(&img2, &mut rgb_img2, opencv::imgproc::COLOR_GRAY2RGB, 0)?;
@@ -90,6 +95,7 @@ impl FrontEnd {
             0.8,
             INTER_LINEAR,
         )?;
+
         Ok(())
     }
 
@@ -97,25 +103,114 @@ impl FrontEnd {
         if self.left_camera.is_none() || self.right_camera.is_none() {
             return Err(SLAMError::new("set camera object before initialization").into());
         }
-        let current_frame = self
-            .current_frame
-            .as_mut()
-            .ok_or(SLAMError::new("set frame before initialization"))?;
-        current_frame.borrow_mut().find_keypoints()?;
+        if let Some(current_frame) = &self.current_frame {
+            //.as_deref()
+            //.ok_or(SLAMError::new("set frame before initialization"))?;
+            current_frame.deref().borrow_mut().find_keypoints()?;
 
-        current_frame.borrow_mut().set_as_keyframe(0)?;
-        let num_landmarks = initialize_map(
-            &mut self.map,
-            &Rc::clone(&self.current_frame.as_ref().unwrap()),
-            &self.left_camera.as_ref().unwrap().as_ref(),
-            &self.right_camera.as_ref().unwrap().as_ref(),
-        )?;
+            current_frame.deref().borrow_mut().set_as_keyframe(0)?;
+            let num_landmarks = initialize_map(
+                &mut self.map,
+                &Rc::clone(&self.current_frame.as_ref().unwrap()),
+                &self.left_camera.as_ref().unwrap().as_ref(),
+                &self.right_camera.as_ref().unwrap().as_ref(),
+            )?;
+
+            self.status = FrontendStatus::TRACKING;
+        }
 
         Ok(())
     }
 
     fn track(&self) {
+        if let Some(last_frame) = &self.last_frame {
+            if let Some(current_frame) = &self.current_frame {
+                current_frame.deref().borrow_mut().pose =
+                    self.relative_motion.act_g(last_frame.borrow().pose);
+            }
+        }
+
+        self.track_last_frame();
+
         unimplemented!();
+    }
+
+    fn track_last_frame(&self) -> Result<()> {
+        // prepare float keypoints for optical-flow
+        let mut last_kps = opencv::types::VectorOfPoint2f::new();
+        let mut current_kps = opencv::types::VectorOfPoint2f::new();
+
+        let last_frame = Rc::clone(&self.last_frame.as_ref().unwrap());
+        let last_frame = last_frame.borrow();
+        let current_frame = Rc::clone(&self.current_frame.as_ref().unwrap());
+        let current_frame = current_frame.borrow();
+        debug!("last f len: {:?}", last_frame.left_features.len());
+        for kp in last_frame.left_features.iter() {
+            let kp = kp.borrow();
+            let left_camera = self.left_camera.as_ref().unwrap();
+            //println!("kp: {}, {}", kp.position.pt.x, kp.position.pt.y);
+            if let Some(mp_id) = kp.map_point_id {
+                let mp = &self.map.landmarks[&mp_id];
+                let px = left_camera.world_to_pixel(&mp.position, &current_frame.pose);
+                //self.left_camera.unwrap().world_to_camera(p_w, t_c_w)
+                last_kps.push(kp.position.pt); // just push the keypoint in mat1
+                current_kps.push(Point2f::new(px.x as f32, px.y as f32));
+                //println!("px: {}, {}", px.x, px.y);
+            } else {
+                last_kps.push(kp.position.pt);
+                current_kps.push(kp.position.pt);
+            }
+        }
+
+        debug!(
+            "kps len last: {}, current: {}",
+            last_kps.len(),
+            current_kps.len()
+        );
+
+        let mut err = Mat::default();
+        let mut status: opencv::core::Vector<u8> = Vec::new().into();
+        opencv::video::calc_optical_flow_pyr_lk(
+            &last_frame.left_image,
+            &current_frame.left_image,
+            &mut last_kps,
+            &mut current_kps,
+            &mut status,
+            &mut err,
+            opencv::core::Size::new(11, 11),
+            3,
+            opencv::core::TermCriteria::new(
+                opencv::core::TermCriteria_Type::COUNT as i32
+                    + opencv::core::TermCriteria_Type::EPS as i32,
+                30,
+                0.01,
+            )?,
+            opencv::video::OPTFLOW_USE_INITIAL_FLOW,
+            1e-4,
+        )?;
+
+        let mut features = Vec::new();
+        let mut cnt = 0;
+        for i in 0..status.len() {
+            let s = status.get(i)?;
+            if s != 0 {
+                cnt += 1;
+                let kp = current_kps.get(i)?;
+                features.push(Some(Rc::new(RefCell::new(Feature::new(
+                    &KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1)?,
+                )))));
+            } else {
+                features.push(None);
+            }
+        }
+        debug!(
+            "number of keypoints in last image: {}, status len: {}, features len: {}",
+            cnt,
+            status.len(),
+            features.len(),
+        );
+
+        Ok(())
     }
 
     pub fn get_image(&self) -> Result<Mat> {
@@ -192,12 +287,12 @@ fn test_triangulation() -> Result<()> {
     };
 
     let left_pos = yakf::linalg::Vector2::from_vec(vec![
-        f_left.position.pt.x as f64,
-        f_left.position.pt.y as f64,
+        f_left.borrow().position.pt.x as f64,
+        f_left.borrow().position.pt.y as f64,
     ]);
     let right_pos = yakf::linalg::Vector2::from_vec(vec![
-        f_right.position.pt.x as f64,
-        f_right.position.pt.y as f64,
+        f_right.borrow().position.pt.x as f64,
+        f_right.borrow().position.pt.y as f64,
     ]);
     let points = vec![
         left_camera.pixel_to_camera(&left_pos, 1.),
@@ -226,8 +321,8 @@ fn initialize_map(
 ) -> Result<usize> {
     let poses = vec![left_camera.pose, right_camera.pose];
     let mut num_landmarks = 0;
-    for i in 0..frame.borrow().left_features.len() {
-        let frame_b = frame.borrow();
+    let frame_b = frame.borrow();
+    for i in 0..frame_b.left_features.len() {
         let f_left = &frame_b.left_features[i];
         let f_right = match &frame_b.right_features[i] {
             None => continue,
@@ -235,12 +330,12 @@ fn initialize_map(
         };
 
         let left_pos = yakf::linalg::Vector2::from_vec(vec![
-            f_left.position.pt.x as f64,
-            f_left.position.pt.y as f64,
+            f_left.borrow().position.pt.x as f64,
+            f_left.borrow().position.pt.y as f64,
         ]);
         let right_pos = yakf::linalg::Vector2::from_vec(vec![
-            f_right.position.pt.x as f64,
-            f_right.position.pt.y as f64,
+            f_right.borrow().position.pt.x as f64,
+            f_right.borrow().position.pt.y as f64,
         ]);
         let points = vec![
             left_camera.pixel_to_camera(&left_pos, 1.),
@@ -253,6 +348,11 @@ fn initialize_map(
             let new_id = map.add_new_map_point(&pt_world);
             map.add_observation(new_id, f_left)?;
             map.add_observation(new_id, f_right)?;
+
+            frame_b.left_features[i].deref().borrow_mut().map_point_id = Some(new_id);
+            if let Some(r_feature) = &frame_b.right_features[i] {
+                r_feature.deref().borrow_mut().map_point_id = Some(new_id);
+            }
         }
     }
     println!("initial map created with {} map points", num_landmarks);
