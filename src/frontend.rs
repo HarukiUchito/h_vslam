@@ -66,7 +66,7 @@ impl FrontEnd {
             FrontendStatus::INITIALIZATION => {
                 self.initialize()?;
             }
-            FrontendStatus::TRACKING => self.track(),
+            FrontendStatus::TRACKING => self.track()?,
             FrontendStatus::LOST => (),
         }
 
@@ -122,17 +122,19 @@ impl FrontEnd {
         Ok(())
     }
 
-    fn track(&self) {
+    fn track(&self) -> Result<()> {
         if let Some(last_frame) = &self.last_frame {
             if let Some(current_frame) = &self.current_frame {
                 current_frame.deref().borrow_mut().pose =
                     self.relative_motion.act_g(last_frame.borrow().pose);
+                current_frame.deref().borrow_mut().find_keypoints()?;
             }
         }
 
-        self.track_last_frame();
+        self.track_last_frame()?;
 
-        unimplemented!();
+        //unimplemented!();
+        Ok(())
     }
 
     fn track_last_frame(&self) -> Result<()> {
@@ -383,6 +385,26 @@ fn test_map_initialization() -> Result<()> {
     )?;
 
     assert_eq!(num_landmarks, 79);
+
+    Ok(())
+}
+
+#[test]
+fn test_track_last_frame() -> Result<()> {
+    let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from(
+        "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05",
+    ));
+    dataset.load_calib_file()?;
+
+    let mut frontend = FrontEnd::new();
+    frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
+    let new_frame = dataset.get_frame()?;
+    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+    dataset.next_frame();
+    let new_frame = dataset.get_frame()?;
+    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+
+    assert_eq!(79, 79);
 
     Ok(())
 }

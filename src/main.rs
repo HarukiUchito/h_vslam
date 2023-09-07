@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -46,6 +47,10 @@ async fn main() -> Result<()> {
     let mut pool = LocalPool::new();
     let spawner = pool.spawner();
 
+    let mut update_required = false;
+    let update_arc = Arc::new(Mutex::new(update_required));
+    let update_arc0 = Arc::clone(&update_arc);
+
     // for sub2 we just print the data
     let dataset_arc0 = Arc::clone(&dataset_arc);
     let sub2 =
@@ -53,7 +58,8 @@ async fn main() -> Result<()> {
     spawner.spawn_local(async move {
         sub2.for_each(|msg| {
             dataset_arc0.lock().unwrap().next_frame();
-            println!("topic2: new msg: {}", msg.data);
+            *(update_arc0.lock().unwrap()) = true;
+            println!("update required");
             future::ready(())
         })
         .await
@@ -76,8 +82,11 @@ async fn main() -> Result<()> {
     let mut i = 0;
     let dataset_arc1 = Arc::clone(&dataset_arc);
     loop {
-        let new_frame = dataset_arc1.lock().unwrap().get_frame()?;
-        frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+        if *update_arc.lock().unwrap() {
+            let new_frame = dataset_arc1.lock().unwrap().get_frame()?;
+            frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+            *(update_arc.lock().unwrap()) = false;
+        }
 
         i += 1;
         timer.tick().await?;
