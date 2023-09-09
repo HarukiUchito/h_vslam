@@ -127,17 +127,26 @@ impl FrontEnd {
             if let Some(current_frame) = &self.current_frame {
                 current_frame.deref().borrow_mut().pose =
                     self.relative_motion.act_g(last_frame.borrow().pose);
-                current_frame.deref().borrow_mut().find_keypoints()?;
             }
         }
 
-        self.track_last_frame()?;
+        let num_track_last = self.track_last_frame()?;
+
+        if let Some(current_frame) = &self.current_frame {
+            let mut current_frame = current_frame.deref().borrow_mut();
+            current_frame.find_right_keypoints()?;
+
+            assert!(current_frame.left_features.len() == current_frame.right_features.len());
+
+            current_frame.draw_keypoints_from_features(true)?;
+            current_frame.draw_keypoints_from_features(false)?;
+        }
 
         //unimplemented!();
         Ok(())
     }
 
-    fn track_last_frame(&self) -> Result<()> {
+    fn track_last_frame(&self) -> Result<usize> {
         // prepare float keypoints for optical-flow
         let mut last_kps = opencv::types::VectorOfPoint2f::new();
         let mut current_kps = opencv::types::VectorOfPoint2f::new();
@@ -145,7 +154,7 @@ impl FrontEnd {
         let last_frame = Rc::clone(&self.last_frame.as_ref().unwrap());
         let last_frame = last_frame.borrow();
         let current_frame = Rc::clone(&self.current_frame.as_ref().unwrap());
-        let current_frame = current_frame.borrow();
+        let mut current_frame = current_frame.deref().borrow_mut();
         debug!("last f len: {:?}", last_frame.left_features.len());
         for kp in last_frame.left_features.iter() {
             let kp = kp.borrow();
@@ -191,28 +200,27 @@ impl FrontEnd {
             1e-4,
         )?;
 
-        let mut features = Vec::new();
         let mut cnt = 0;
         for i in 0..status.len() {
             let s = status.get(i)?;
             if s != 0 {
                 cnt += 1;
                 let kp = current_kps.get(i)?;
-                features.push(Some(Rc::new(RefCell::new(Feature::new(
-                    &KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1)?,
-                )))));
-            } else {
-                features.push(None);
+                let mut feat = Feature::new(&KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1)?);
+                feat.map_point_id = last_frame.left_features[i].borrow().map_point_id;
+                current_frame
+                    .left_features
+                    .push(Rc::new(RefCell::new(feat)));
             }
         }
         debug!(
             "number of keypoints in last image: {}, status len: {}, features len: {}",
             cnt,
             status.len(),
-            features.len(),
+            current_frame.left_features.len(),
         );
 
-        Ok(())
+        Ok(cnt)
     }
 
     pub fn get_image(&self) -> Result<Mat> {
@@ -391,9 +399,7 @@ fn test_map_initialization() -> Result<()> {
 
 #[test]
 fn test_track_last_frame() -> Result<()> {
-    let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from(
-        "/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05",
-    ));
+    let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
     dataset.load_calib_file()?;
 
     let mut frontend = FrontEnd::new();
@@ -404,7 +410,15 @@ fn test_track_last_frame() -> Result<()> {
     let new_frame = dataset.get_frame()?;
     frontend.update(&Rc::new(RefCell::new(new_frame)))?;
 
-    assert_eq!(79, 79);
+    assert_eq!(
+        frontend
+            .current_frame
+            .expect("no current_frame")
+            .borrow()
+            .left_features
+            .len(),
+        78
+    );
 
     Ok(())
 }

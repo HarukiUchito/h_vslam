@@ -69,7 +69,7 @@ impl KITTIDataset {
         Ok(())
     }
 
-    pub fn get_frame(&self) -> Result<Frame, opencv::Error> {
+    pub fn get_frame(&self) -> Result<Frame> {
         let left_image_path = self
             .dataset_path
             .join("image_0")

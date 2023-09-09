@@ -1,6 +1,9 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::ops::Deref;
 use std::rc::Rc;
 
+use anyhow::Ok;
 use opencv::core::Mat;
 use opencv::core::Point2f;
 use opencv::core::Scalar;
@@ -74,11 +77,7 @@ impl Default for Frame {
 }
 
 impl Frame {
-    pub fn load_image(
-        mut self,
-        left_img_path: &str,
-        right_img_path: &str,
-    ) -> Result<Self, opencv::Error> {
+    pub fn load_image(mut self, left_img_path: &str, right_img_path: &str) -> Result<Self> {
         let left_img = imgcodecs::imread(left_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
         let right_img = imgcodecs::imread(right_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
 
@@ -108,22 +107,49 @@ impl Frame {
         Ok(())
     }
 
-    pub fn find_keypoints(&mut self) -> Result<(), opencv::Error> {
+    pub fn find_keypoints(&mut self) -> Result<()> {
+        self.find_left_keypoints()?;
+        self.find_right_keypoints()?;
+
+        assert!(self.left_features.len() == self.right_features.len());
+
+        self.draw_keypoints_from_features(true)?;
+        self.draw_keypoints_from_features(false)?;
+
+        Ok(())
+    }
+
+    pub fn find_left_keypoints(&mut self) -> Result<()> {
         let left_kps = detect_features(&self.left_image, &None)?;
         for kp in left_kps.iter() {
             self.left_features
                 .push(Rc::new(RefCell::new(Feature::new(&kp))));
         }
+        Ok(())
+    }
 
+    pub fn draw_keypoints_from_features(&mut self, is_left: bool) -> Result<()> {
+        let mut keypoints = VectorOfKeyPoint::new();
+        if is_left {
+            for feat in self.left_features.iter() {
+                keypoints.push(feat.clone().deref().borrow().position.clone());
+            }
+            self.left_image_kps = draw_keypoints(&self.left_image, &keypoints)?;
+        } else {
+            for feat in self.right_features.iter() {
+                if let Some(feat) = feat.as_ref() {
+                    keypoints.push(feat.clone().deref().borrow().position.clone());
+                }
+            }
+            self.right_image_kps = draw_keypoints(&self.right_image, &keypoints)?;
+        }
+        Ok(())
+    }
+
+    pub fn find_right_keypoints(&mut self) -> Result<()> {
         let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features))?;
         self.right_features =
             detect_feature_movement(&self.left_features, &self.left_image, &self.right_image)?;
-
-        assert!(self.left_features.len() == self.right_features.len());
-
-        self.left_image_kps = draw_keypoints(&self.left_image, &left_kps)?;
-        self.right_image_kps = draw_keypoints(&self.right_image, &right_kps_img)?;
-
         Ok(())
     }
 }
@@ -131,7 +157,7 @@ impl Frame {
 fn detect_features(
     mat: &Mat,
     features: &Option<&Vec<Rc<RefCell<Feature>>>>,
-) -> Result<VectorOfKeyPoint, opencv::Error> {
+) -> Result<VectorOfKeyPoint> {
     let num_features = 150;
     let mut gftt =
         <dyn opencv::features2d::GFTTDetector>::create(num_features, 0.01, 20.0, 3, false, 0.04)?;
@@ -142,7 +168,7 @@ fn detect_features(
     )?;
     if let Some(features) = features {
         for f in features.iter() {
-            let f = f.borrow();
+            let f = f.deref().borrow();
             let p1 = f.position.pt - Point2f::new(10.0, 10.0);
             opencv::imgproc::rectangle(
                 &mut mask,
@@ -169,12 +195,12 @@ fn detect_feature_movement(
     features: &Vec<Rc<RefCell<Feature>>>,
     mat1: &Mat,
     mat2: &Mat,
-) -> Result<Vec<Option<Rc<RefCell<Feature>>>>, opencv::Error> {
+) -> Result<Vec<Option<Rc<RefCell<Feature>>>>> {
     // prepare float keypoints for optical-flow
     let mut fkps1 = VectorOfPoint2f::new();
     let mut fkps2 = VectorOfPoint2f::new();
     for kp in features.iter() {
-        let kp = kp.borrow();
+        let kp = kp.deref().borrow();
         fkps1.push(kp.position.pt.clone()); // just push the keypoint in mat1
         fkps2.push(kp.position.pt);
     }
@@ -224,7 +250,7 @@ fn detect_feature_movement(
     Ok(features)
 }
 
-fn draw_keypoints(mat: &Mat, keypoints: &VectorOfKeyPoint) -> Result<Mat, opencv::Error> {
+fn draw_keypoints(mat: &Mat, keypoints: &VectorOfKeyPoint) -> Result<Mat> {
     let mut out_image = Mat::default();
     opencv::features2d::draw_keypoints(
         &mat,
