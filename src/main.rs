@@ -25,8 +25,7 @@ mod map_point;
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let seq_dir_path =
-        std::path::PathBuf::from("/home/xoke/Downloads/data_odometry_gray/dataset/sequences/05");
+    let seq_dir_path = std::path::PathBuf::from("/home/haruki/data/dataset/sequences/05");
     let mut dataset = kitti_dataset::KITTIDataset::new(seq_dir_path.clone());
     dataset.load_calib_file()?;
 

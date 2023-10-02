@@ -15,12 +15,12 @@ env_logger = "0.9.0"
 yakf = "0.1.12"
 csv = "1.2.2"
 anyhow = "1.0.71"
-nalgebra = "0.32.2"
+nalgebra = "0.31"
 approx = "0.5.1"
 r2r = "0.7.5"
 futures = "0.3.25"
-
 ros_pointcloud2 = { version = "0.3.0", features = ["r2r_msg"]}
+g2o = {path = "../g2o-rs"}
 
 [[bin]]
 name = "h_vslam"

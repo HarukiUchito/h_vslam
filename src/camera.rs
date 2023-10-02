@@ -25,6 +25,10 @@ impl Camera {
         }
     }
 
+    pub fn intrinsic_matrix(&self) -> nalgebra::Matrix3::<f64> {
+        nalgebra::Matrix3::<f64>::new(self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0)
+    }
+
     // coordinate transform functions
     pub fn world_to_camera(&self, p_w: &Vec3, t_c_w: &SE3) -> Vec3 {
         self.pose.act_v(t_c_w.act_v(*p_w))

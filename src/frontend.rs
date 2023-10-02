@@ -142,6 +142,8 @@ impl FrontEnd {
             current_frame.draw_keypoints_from_features(false)?;
         }
 
+        self.estimate_current_pose();
+
         //unimplemented!();
         Ok(())
     }
@@ -221,6 +223,96 @@ impl FrontEnd {
         );
 
         Ok(cnt)
+    }
+
+    fn estimate_current_pose(&self) {
+        println!("frame pose before: {:?}", self.current_frame.as_ref().expect("msg").borrow().pose);
+
+        let (p_r, p_t) = self
+            .current_frame
+            .as_ref()
+            .expect("msg")
+            .borrow()
+            .pose
+            .to_r_t();
+        let rot = g2o::Mat33::from_nalgebra(&unsafe {
+            std::mem::transmute(p_r)
+        });
+        let tl = g2o::Vec3::from_nalgebra(&unsafe {
+            std::mem::transmute(p_t)
+        });
+        let pose = g2o::SE3::from_rt(rot, tl);
+
+        let vp = Rc::new(RefCell::new(g2o::VertexPose::new()));
+        vp.deref().borrow_mut().set_id(0);
+        vp.deref().borrow_mut().set_estimate(pose);
+
+        let mut evec = Vec::new();
+
+        let algo = g2o::OptimizationAlgorithmLevenberg::construct();
+        let mut opt = g2o::SparseOptimizer::new();
+        opt.set_algorithm(&algo);
+        opt.add_vertex2(vp.clone());
+
+        let mat_k = g2o::Mat33::from_nalgebra(&unsafe {
+            std::mem::transmute(self.left_camera.as_ref().expect("msg").intrinsic_matrix())
+        });
+        
+        let current_frame = Rc::clone(&self.current_frame.as_ref().unwrap());
+        let mut current_frame = current_frame.deref().borrow_mut();
+        let mut index = 1;
+        
+        for frame in current_frame.left_features.iter() {
+            if let Some(mp_id) = frame.borrow().map_point_id {
+                let mp = &self.map.landmarks[&mp_id];
+                let mp_pos = g2o::Vec3::from_nalgebra(&unsafe {
+                    std::mem::transmute(mp.position)
+                });
+
+                let fpos = g2o::Vec2::from_nalgebra(&unsafe {
+                    std::mem::transmute(nalgebra::Vector2::from_vec(vec![
+                        frame.borrow().position.pt.x as f64,
+                        frame.borrow().position.pt.y as f64,
+                    ]))
+                });
+
+                let mat_i = g2o::Mat22::from_nalgebra(&unsafe { std::mem::transmute(nalgebra::Matrix2::<f64>::identity())});
+
+                let mut edge = g2o::EdgeProjectionPoseOnly::new();
+                edge.set_pos(mp_pos);
+                edge.set_k(mat_k);
+                edge.set_id(index);
+                edge.set_vertex(0, vp.clone());
+                edge.set_measurement(fpos);
+                edge.set_information(mat_i);
+                edge.set_robust_kernel();
+
+                //opt.add_edge2(&mut edge);
+
+                evec.push(edge);
+                //opt.add_edge2(&mut evec[evec.len() - 1]);
+
+
+                index += 1;
+            }
+        }
+
+        for e in evec.iter_mut() {
+            opt.add_edge2(e);
+            //e.get_id();
+            //e.get_pos();
+        }
+
+        vp.deref().borrow_mut().set_estimate(pose);
+        println!("iniopt: {}", opt.initialize_optimization(0));
+        println!("opt: {}", opt.optimize(10, false));
+        vp.deref().borrow_mut().get_estimate();
+
+        vp.deref().borrow_mut().set_estimate(pose);
+        opt.initialize_optimization(0);
+        opt.optimize(10, false);
+        vp.deref().borrow_mut().get_estimate();
+        //println!("test: {}", opt.test());
     }
 
     pub fn get_image(&self) -> Result<Mat> {
