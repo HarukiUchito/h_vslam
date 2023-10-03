@@ -29,6 +29,7 @@ use crate::map_point::MapPoint;
 pub struct Feature {
     pub position: KeyPoint,
     pub map_point_id: Option<usize>,
+    pub is_outlier: bool,
 }
 
 impl Feature {
@@ -36,6 +37,7 @@ impl Feature {
         Feature {
             position: *kp,
             map_point_id: None,
+            is_outlier: false,
         }
     }
 }

@@ -2,6 +2,7 @@ use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::thread::current;
 
 use crate::camera::Camera;
 use crate::error::SLAMError;
@@ -262,8 +263,12 @@ impl FrontEnd {
         let mut current_frame = current_frame.deref().borrow_mut();
         let mut index = 1;
         
-        for frame in current_frame.left_features.iter() {
+        let mut feature_indices = Vec::new();
+        for i in 0..current_frame.left_features.len() {
+        //for frame in current_frame.left_features.iter() {
+            let frame = current_frame.left_features[i].clone();
             if let Some(mp_id) = frame.borrow().map_point_id {
+                feature_indices.push(i);
                 let mp = &self.map.landmarks[&mp_id];
                 let mp_pos = g2o::Vec3::from_nalgebra(&unsafe {
                     std::mem::transmute(mp.position)
@@ -289,30 +294,47 @@ impl FrontEnd {
 
                 //opt.add_edge2(&mut edge);
 
-                evec.push(edge);
+                evec.push(Rc::new(RefCell::new(edge)));
                 //opt.add_edge2(&mut evec[evec.len() - 1]);
 
 
                 index += 1;
-            }
+            };
         }
 
         for e in evec.iter_mut() {
-            opt.add_edge2(e);
-            //e.get_id();
-            //e.get_pos();
+            opt.add_edge2(e.clone());
+        };
+
+        let chi2_th = 5.991;
+        for i in 0..4 {
+            let mut outlier_cnt = 0;
+
+            //vp.deref().borrow_mut().set_estimate(pose);
+            println!("iniopt: {}", opt.initialize_optimization(0));
+            println!("opt: {}", opt.optimize(10, false));
+            vp.deref().borrow_mut().get_estimate();    
+
+            for j in 0..feature_indices.len() {
+                let mut e = evec[j].deref().borrow_mut();
+                let mut f = current_frame.left_features[j].deref().borrow_mut();
+                if f.is_outlier {
+                    e.compute_error();
+                }
+                let c2 = e.chi2();
+                if c2 > chi2_th {
+                    f.is_outlier = true;
+                    e.set_level(1);
+                    outlier_cnt += 1;
+                } else {
+                    f.is_outlier = false;
+                    e.set_level(0);
+                }
+                if i == 2 {
+                    e.set_null_kernel();
+                }
+            }
         }
-
-        vp.deref().borrow_mut().set_estimate(pose);
-        println!("iniopt: {}", opt.initialize_optimization(0));
-        println!("opt: {}", opt.optimize(10, false));
-        vp.deref().borrow_mut().get_estimate();
-
-        vp.deref().borrow_mut().set_estimate(pose);
-        opt.initialize_optimization(0);
-        opt.optimize(10, false);
-        vp.deref().borrow_mut().get_estimate();
-        //println!("test: {}", opt.test());
     }
 
     pub fn get_image(&self) -> Result<Mat> {
