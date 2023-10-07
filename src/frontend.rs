@@ -15,6 +15,7 @@ use opencv::core::{KeyPoint, Mat, Point2f};
 use opencv::imgproc::INTER_LINEAR;
 
 use log::debug;
+use yakf::kf::One2OneMapSE3;
 
 #[derive(Debug)]
 enum FrontendStatus {
@@ -60,8 +61,6 @@ impl FrontEnd {
     pub fn update(&mut self, new_frame: &Rc<RefCell<Frame>>) -> Result<()> {
         debug!("[frontend update]");
         debug!("status: {:?}", self.status);
-        self.last_frame = self.current_frame.clone();
-        //self.last_frame = Some(Rc::clone(&self.current_frame.as_ref().unwrap()));
         self.current_frame = Some(Rc::clone(new_frame));
         match self.status {
             FrontendStatus::INITIALIZATION => {
@@ -97,6 +96,9 @@ impl FrontEnd {
             INTER_LINEAR,
         )?;
 
+        self.last_frame = self.current_frame.clone();
+        //self.last_frame = Some(Rc::clone(&self.current_frame.as_ref().unwrap()));
+
         Ok(())
     }
 
@@ -126,6 +128,7 @@ impl FrontEnd {
     fn track(&self) -> Result<()> {
         if let Some(last_frame) = &self.last_frame {
             if let Some(current_frame) = &self.current_frame {
+                debug!("update of current pose");
                 current_frame.deref().borrow_mut().pose =
                     self.relative_motion.act_g(last_frame.borrow().pose);
             }
@@ -226,8 +229,16 @@ impl FrontEnd {
         Ok(cnt)
     }
 
-    fn estimate_current_pose(&self) {
-        println!("frame pose before: {:?}", self.current_frame.as_ref().expect("msg").borrow().pose);
+    fn estimate_current_pose(&self) -> anyhow::Result<usize> {
+        debug!(
+            "frame pose before: {:?}",
+            self.current_frame
+                .as_ref()
+                .expect("msg")
+                .borrow()
+                .pose
+                .to_grp()
+        );
 
         let (p_r, p_t) = self
             .current_frame
@@ -236,12 +247,8 @@ impl FrontEnd {
             .borrow()
             .pose
             .to_r_t();
-        let rot = g2o::Mat33::from_nalgebra(&unsafe {
-            std::mem::transmute(p_r)
-        });
-        let tl = g2o::Vec3::from_nalgebra(&unsafe {
-            std::mem::transmute(p_t)
-        });
+        let rot = g2o::Mat33::from_nalgebra(&unsafe { std::mem::transmute(p_r) });
+        let tl = g2o::Vec3::from_nalgebra(&unsafe { std::mem::transmute(p_t) });
         let pose = g2o::SE3::from_rt(rot, tl);
 
         let vp = Rc::new(RefCell::new(g2o::VertexPose::new()));
@@ -258,21 +265,19 @@ impl FrontEnd {
         let mat_k = g2o::Mat33::from_nalgebra(&unsafe {
             std::mem::transmute(self.left_camera.as_ref().expect("msg").intrinsic_matrix())
         });
-        
+
         let current_frame = Rc::clone(&self.current_frame.as_ref().unwrap());
         let mut current_frame = current_frame.deref().borrow_mut();
         let mut index = 1;
-        
+
         let mut feature_indices = Vec::new();
         for i in 0..current_frame.left_features.len() {
-        //for frame in current_frame.left_features.iter() {
+            //for frame in current_frame.left_features.iter() {
             let frame = current_frame.left_features[i].clone();
             if let Some(mp_id) = frame.borrow().map_point_id {
                 feature_indices.push(i);
                 let mp = &self.map.landmarks[&mp_id];
-                let mp_pos = g2o::Vec3::from_nalgebra(&unsafe {
-                    std::mem::transmute(mp.position)
-                });
+                let mp_pos = g2o::Vec3::from_nalgebra(&unsafe { std::mem::transmute(mp.position) });
 
                 let fpos = g2o::Vec2::from_nalgebra(&unsafe {
                     std::mem::transmute(nalgebra::Vector2::from_vec(vec![
@@ -281,7 +286,9 @@ impl FrontEnd {
                     ]))
                 });
 
-                let mat_i = g2o::Mat22::from_nalgebra(&unsafe { std::mem::transmute(nalgebra::Matrix2::<f64>::identity())});
+                let mat_i = g2o::Mat22::from_nalgebra(&unsafe {
+                    std::mem::transmute(nalgebra::Matrix2::<f64>::identity())
+                });
 
                 let mut edge = g2o::EdgeProjectionPoseOnly::new();
                 edge.set_pos(mp_pos);
@@ -292,11 +299,7 @@ impl FrontEnd {
                 edge.set_information(mat_i);
                 edge.set_robust_kernel();
 
-                //opt.add_edge2(&mut edge);
-
                 evec.push(Rc::new(RefCell::new(edge)));
-                //opt.add_edge2(&mut evec[evec.len() - 1]);
-
 
                 index += 1;
             };
@@ -304,16 +307,19 @@ impl FrontEnd {
 
         for e in evec.iter_mut() {
             opt.add_edge2(e.clone());
-        };
+        }
 
         let chi2_th = 5.991;
+        let mut outlier_cnt = 0;
         for i in 0..4 {
-            let mut outlier_cnt = 0;
+            outlier_cnt = 0;
 
             //vp.deref().borrow_mut().set_estimate(pose);
-            println!("iniopt: {}", opt.initialize_optimization(0));
-            println!("opt: {}", opt.optimize(10, false));
-            vp.deref().borrow_mut().get_estimate();    
+            let optini = opt.initialize_optimization(0);
+            let optnum = opt.optimize(10, false);
+            if i == 3 {
+                debug!("opt ini: {}, iternum: {}", optini, optnum);
+            }
 
             for j in 0..feature_indices.len() {
                 let mut e = evec[j].deref().borrow_mut();
@@ -335,6 +341,29 @@ impl FrontEnd {
                 }
             }
         }
+        //println!("v_es lie: {:?}", yakf::lie::se3::SE3::from_alg(unsafe {
+        //    std::mem::transmute(vp.deref().borrow_mut().get_estimate())
+        //}));
+        let (rm, tv) = vp.deref().borrow_mut().get_estimate();
+        current_frame.borrow_mut().pose =
+            yakf::lie::se3::SE3::from_r_t(unsafe { std::mem::transmute(rm) }, unsafe {
+                std::mem::transmute(tv)
+            });
+        debug!("updated pose rt: {:?}", current_frame.pose.to_r_t());
+
+        let inlier_cnt = feature_indices.len() - outlier_cnt;
+        debug!("cnt outlier/inlier : {} / {}", outlier_cnt, inlier_cnt);
+
+        for i in 0..feature_indices.len() {
+            let idx = feature_indices[i];
+            let mut f = current_frame.left_features[idx].deref().borrow_mut();
+            if f.is_outlier {
+                f.map_point_id = None;
+                f.is_outlier = false;
+            }
+        }
+
+        Ok(inlier_cnt)
     }
 
     pub fn get_image(&self) -> Result<Mat> {
@@ -430,7 +459,9 @@ fn test_triangulation() -> Result<()> {
     ]);
 
     match triangulation(&poses, &points) {
-        Ok(pt_world) => approx::assert_relative_eq!(pt_world, ans, epsilon = 1e-4),
+        Ok(pt_world) => {
+            approx::assert_relative_eq!(pt_world, ans, epsilon = 1e-4)
+        }
         Err(e) => return Err(e),
     }
 
