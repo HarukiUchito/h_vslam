@@ -7,7 +7,7 @@ use std::thread::current;
 use crate::camera::Camera;
 use crate::error::SLAMError;
 use crate::frame::{Feature, Frame};
-use crate::kitti_dataset;
+use crate::kitti_dataset::{self, KITTIDataset};
 use crate::map::Map;
 use anyhow::Result;
 
@@ -33,6 +33,8 @@ pub struct FrontEnd {
     image_output: Mat,
     pub map: Map,
 
+    inliner_cnt: Option<usize>,
+
     relative_motion: yakf::lie::se3::SE3,
 }
 
@@ -46,6 +48,7 @@ impl FrontEnd {
             right_camera: None,
             image_output: Mat::default(),
             map: Map::new(),
+            inliner_cnt: None,
             relative_motion: yakf::lie::se3::SE3::from_r_t(
                 yakf::linalg::Matrix3::from_vec(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
                 yakf::linalg::Vector3::<f64>::new(0.0, 0.0, 0.0),
@@ -125,7 +128,7 @@ impl FrontEnd {
         Ok(())
     }
 
-    fn track(&self) -> Result<()> {
+    fn track(&mut self) -> Result<()> {
         if let Some(last_frame) = &self.last_frame {
             if let Some(current_frame) = &self.current_frame {
                 debug!("update of current pose");
@@ -146,7 +149,8 @@ impl FrontEnd {
             current_frame.draw_keypoints_from_features(false)?;
         }
 
-        self.estimate_current_pose();
+        let inlier_cnt = self.estimate_current_pose()?;
+        self.inliner_cnt = Some(inlier_cnt);
 
         //unimplemented!();
         Ok(())
@@ -418,10 +422,16 @@ pub fn triangulation(
     })
 }
 
-#[test]
-fn test_triangulation() -> Result<()> {
+
+fn setup_test() -> Result<KITTIDataset> {
     let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
     dataset.load_calib_file()?;
+    Ok(dataset)
+}
+
+#[test]
+fn test_triangulation() -> Result<()> {
+    let mut dataset = setup_test()?;
 
     let mut first_frame = dataset.get_frame()?;
     first_frame.find_keypoints()?;
@@ -519,8 +529,7 @@ fn initialize_map(
 
 #[test]
 fn test_map_initialization() -> Result<()> {
-    let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
-    dataset.load_calib_file()?;
+    let dataset = setup_test()?;
 
     let mut first_frame = dataset.get_frame()?;
     first_frame.find_keypoints()?;
@@ -544,8 +553,7 @@ fn test_map_initialization() -> Result<()> {
 
 #[test]
 fn test_track_last_frame() -> Result<()> {
-    let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
-    dataset.load_calib_file()?;
+    let mut dataset = setup_test()?;
 
     let mut frontend = FrontEnd::new();
     frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
@@ -563,6 +571,29 @@ fn test_track_last_frame() -> Result<()> {
             .left_features
             .len(),
         78
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_estimate_current_pose() -> Result<()> {
+    let mut dataset = setup_test()?;
+
+    let mut frontend = FrontEnd::new();
+    frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
+    
+    let new_frame = dataset.get_frame()?;
+    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+
+    dataset.next_frame();
+
+    let new_frame = dataset.get_frame()?;
+    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+
+    assert_eq!(
+        frontend.inliner_cnt,
+        Some(72)
     );
 
     Ok(())
