@@ -5,7 +5,7 @@ use crate::{error::SLAMError, frame::Feature, frame::Frame, map_point::MapPoint}
 
 pub struct Map {
     pub landmarks: HashMap<usize, MapPoint>, // id -> MapPoint
-    keyframes: HashMap<usize, Rc<RefCell<Frame>>>,
+    pub keyframes: HashMap<usize, Rc<RefCell<Frame>>>,
     current_frame: Option<Rc<RefCell<Frame>>>,
 }
 
@@ -35,10 +35,11 @@ impl Map {
         }
     }
 
-    pub fn add_keyframe(&mut self, frame: &Rc<RefCell<Frame>>) -> Result<()> {
-        self.current_frame = Some(Rc::clone(frame));
+    pub fn add_keyframe(&mut self, frame: Rc<RefCell<Frame>>) -> Result<()> {
+        self.current_frame = Some(frame.clone());
+        let id = frame.borrow().key_frame_id.unwrap();
         self.keyframes
-            .insert(frame.borrow().key_frame_id, Rc::clone(frame));
+            .insert(id, frame.clone());
         Ok(())
     }
 }

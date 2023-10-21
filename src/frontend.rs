@@ -20,7 +20,8 @@ use yakf::kf::One2OneMapSE3;
 #[derive(Debug)]
 enum FrontendStatus {
     INITIALIZATION,
-    TRACKING,
+    TRACKING_GOOD,
+    TRACKING_BAD,
     LOST,
 }
 
@@ -62,6 +63,7 @@ impl FrontEnd {
     }
 
     pub fn update(&mut self, new_frame: &Rc<RefCell<Frame>>) -> Result<()> {
+        println!("");
         debug!("[frontend update]");
         debug!("status: {:?}", self.status);
         self.current_frame = Some(Rc::clone(new_frame));
@@ -69,7 +71,8 @@ impl FrontEnd {
             FrontendStatus::INITIALIZATION => {
                 self.initialize()?;
             }
-            FrontendStatus::TRACKING => self.track()?,
+            FrontendStatus::TRACKING_GOOD => self.track()?,
+            FrontendStatus::TRACKING_BAD => self.track()?,
             FrontendStatus::LOST => (),
         }
 
@@ -122,7 +125,7 @@ impl FrontEnd {
                 &self.right_camera.as_ref().unwrap().as_ref(),
             )?;
 
-            self.status = FrontendStatus::TRACKING;
+            self.status = FrontendStatus::TRACKING_GOOD;
         }
 
         Ok(())
@@ -152,7 +155,45 @@ impl FrontEnd {
         let inlier_cnt = self.estimate_current_pose()?;
         self.inliner_cnt = Some(inlier_cnt);
 
+        const FEATURES_CNT_TRACKING_GOOD: usize = 50;
+        const FEATURES_CNT_TRACKING_BAD: usize = 20;
+        const FEATURES_CNT_AS_KEYFRAME: usize = 80;
+        if let Some(inliner_cnt) = self.inliner_cnt {
+            if inliner_cnt > FEATURES_CNT_TRACKING_GOOD {
+                self.status = FrontendStatus::TRACKING_GOOD;
+            } else if inliner_cnt > FEATURES_CNT_TRACKING_BAD {
+                self.status = FrontendStatus::TRACKING_BAD;
+            } else {
+                self.status = FrontendStatus::LOST;
+            }
+            if inliner_cnt < FEATURES_CNT_AS_KEYFRAME {
+                self.insert_keyframe()?;
+            }
+        }
+
         //unimplemented!();
+        Ok(())
+    }
+
+    fn insert_keyframe(&mut self) -> Result<()> {
+        if let Some(current_frame) = &self.current_frame {
+            { // mutable borrow
+                let mut current_frame = current_frame.deref().borrow_mut();
+                let ksize = self.map.keyframes.len();
+                current_frame.set_as_keyframe(ksize)?;
+
+                debug!(
+                    "set frame ({}) as keyframe ({})",
+                    current_frame.img_index,
+                    current_frame.key_frame_id.expect("not keyframe")
+                );
+            }
+
+            self.map
+                .add_keyframe(Rc::clone(&self.current_frame.as_ref().unwrap()))?;
+            //self.map.add_keyframe(self.current_frame.as_ref().unwrap())?;
+        }
+
         Ok(())
     }
 
@@ -349,10 +390,12 @@ impl FrontEnd {
         //    std::mem::transmute(vp.deref().borrow_mut().get_estimate())
         //}));
         let (rm, tv) = vp.deref().borrow_mut().get_estimate();
-        current_frame.borrow_mut().pose =
-            yakf::lie::se3::SE3::from_r_t(unsafe { std::mem::transmute(rm) }, unsafe {
-                std::mem::transmute(tv)
-            });
+        {
+            current_frame.borrow_mut().pose =
+                yakf::lie::se3::SE3::from_r_t(unsafe { std::mem::transmute(rm) }, unsafe {
+                    std::mem::transmute(tv)
+                });
+        }
         debug!("updated pose rt: {:?}", current_frame.pose.to_r_t());
 
         let inlier_cnt = feature_indices.len() - outlier_cnt;
@@ -421,7 +464,6 @@ pub fn triangulation(
         )
     })
 }
-
 
 fn setup_test() -> Result<KITTIDataset> {
     let mut dataset = kitti_dataset::KITTIDataset::new(std::path::PathBuf::from("./test/"));
@@ -523,7 +565,7 @@ fn initialize_map(
     println!("initial map created with {} map points", num_landmarks);
     //let points = vec![left_camera.pixel_to_camera(yakf::so2::Vec2::, depth)];
 
-    map.add_keyframe(&Rc::clone(frame))?;
+    map.add_keyframe(Rc::clone(frame))?;
     Ok(num_landmarks)
 }
 
@@ -582,7 +624,7 @@ fn test_estimate_current_pose() -> Result<()> {
 
     let mut frontend = FrontEnd::new();
     frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
-    
+
     let new_frame = dataset.get_frame()?;
     frontend.update(&Rc::new(RefCell::new(new_frame)))?;
 
@@ -591,10 +633,7 @@ fn test_estimate_current_pose() -> Result<()> {
     let new_frame = dataset.get_frame()?;
     frontend.update(&Rc::new(RefCell::new(new_frame)))?;
 
-    assert_eq!(
-        frontend.inliner_cnt,
-        Some(72)
-    );
+    assert_eq!(frontend.inliner_cnt, Some(72));
 
     Ok(())
 }

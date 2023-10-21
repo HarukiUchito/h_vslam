@@ -79,6 +79,7 @@ impl KITTIDataset {
             .join("image_1")
             .join(format!("{:06}.png", self.img_index));
         let frame = Frame::default().load_image(
+            self.img_index,
             left_image_path.to_str().unwrap(),
             right_image_path.to_str().unwrap(),
         )?;

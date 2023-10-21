@@ -44,6 +44,7 @@ impl Feature {
 
 #[derive(Clone)]
 pub struct Frame {
+    pub img_index: usize,
     pub left_image: Mat,
     pub right_image: Mat,
 
@@ -53,7 +54,7 @@ pub struct Frame {
     pub left_image_kps: Mat,
     pub right_image_kps: Mat,
 
-    pub key_frame_id: usize,
+    pub key_frame_id: Option<usize>,
     pub is_key_frame: bool,
 
     pub pose: yakf::lie::se3::SE3,
@@ -62,13 +63,14 @@ pub struct Frame {
 impl Default for Frame {
     fn default() -> Frame {
         Frame {
+            img_index: 0,
             left_image: Mat::default(),
             right_image: Mat::default(),
             left_features: Vec::default(),
             right_features: Vec::default(),
             left_image_kps: Mat::default(),
             right_image_kps: Mat::default(),
-            key_frame_id: 0,
+            key_frame_id: None,
             is_key_frame: false,
             pose: yakf::lie::se3::SE3::from_r_t(
                 yakf::linalg::Matrix3::from_vec(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
@@ -79,7 +81,8 @@ impl Default for Frame {
 }
 
 impl Frame {
-    pub fn load_image(mut self, left_img_path: &str, right_img_path: &str) -> Result<Self> {
+    pub fn load_image(mut self, img_index: usize, left_img_path: &str, right_img_path: &str) -> Result<Self> {
+        self.img_index = img_index;
         let left_img = imgcodecs::imread(left_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
         let right_img = imgcodecs::imread(right_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
 
@@ -105,7 +108,7 @@ impl Frame {
 
     pub fn set_as_keyframe(&mut self, id: usize) -> Result<()> {
         self.is_key_frame = true;
-        self.key_frame_id = id;
+        self.key_frame_id = Some(id);
         Ok(())
     }
 
