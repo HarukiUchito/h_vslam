@@ -4,6 +4,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use anyhow::Ok;
+use image::open;
 use opencv::core::Mat;
 use opencv::core::Point2f;
 use opencv::core::Scalar;
@@ -81,7 +82,12 @@ impl Default for Frame {
 }
 
 impl Frame {
-    pub fn load_image(mut self, img_index: usize, left_img_path: &str, right_img_path: &str) -> Result<Self> {
+    pub fn load_image(
+        mut self,
+        img_index: usize,
+        left_img_path: &str,
+        right_img_path: &str,
+    ) -> Result<Self> {
         self.img_index = img_index;
         let left_img = imgcodecs::imread(left_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
         let right_img = imgcodecs::imread(right_img_path, opencv::imgcodecs::IMREAD_GRAYSCALE)?;
@@ -159,7 +165,7 @@ impl Frame {
     }
 }
 
-fn detect_features(
+pub fn detect_features(
     mat: &Mat,
     features: &Option<&Vec<Rc<RefCell<Feature>>>>,
 ) -> Result<VectorOfKeyPoint> {
@@ -171,28 +177,28 @@ fn detect_features(
         opencv::core::CV_8UC1,
         opencv::core::Scalar::new(255.0, 255.0, 255.0, 255.0),
     )?;
+    //opencv::viz::imshow("mask", &mask, opencv::core::Size::new(-1, -1))?;
     if let Some(features) = features {
         for f in features.iter() {
             let f = f.deref().borrow();
             let p1 = f.position.pt - Point2f::new(10.0, 10.0);
             opencv::imgproc::rectangle(
                 &mut mask,
-                opencv::core::Rect::new(p1.x as i32, p1.y as i32, 10, 10),
+                opencv::core::Rect::new(p1.x.round() as i32, p1.y.round() as i32, 21, 21),
                 opencv::core::Scalar::new(0.0, 0.0, 0.0, 0.0),
-                1,
+                opencv::imgproc::FILLED,
                 opencv::imgproc::LINE_8,
                 0,
             )?;
         }
     }
+    //opencv::imgcodecs::imwrite("mask.png", &mask, &opencv::types::VectorOfi32::new());
 
     let mut keypoints = VectorOfKeyPoint::new();
     gftt.detect(&mat, &mut keypoints, &mask)?;
 
-    debug!("max features: {}", gftt.get_max_features()?);
+    //debug!("max features: {}", gftt.get_max_features()?);
     debug!("num keypoints: {}", keypoints.len());
-    //println!("{:#?}", keypoints);
-    //for kp in keypoints.iter() {}
     return Ok(keypoints);
 }
 

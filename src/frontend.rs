@@ -6,7 +6,7 @@ use std::thread::current;
 
 use crate::camera::Camera;
 use crate::error::SLAMError;
-use crate::frame::{Feature, Frame};
+use crate::frame::{Feature, Frame, self};
 use crate::kitti_dataset::{self, KITTIDataset};
 use crate::map::Map;
 use anyhow::Result;
@@ -177,7 +177,8 @@ impl FrontEnd {
 
     fn insert_keyframe(&mut self) -> Result<()> {
         if let Some(current_frame) = &self.current_frame {
-            { // mutable borrow
+            {
+                // mutable borrow
                 let mut current_frame = current_frame.deref().borrow_mut();
                 let ksize = self.map.keyframes.len();
                 current_frame.set_as_keyframe(ksize)?;
@@ -192,6 +193,17 @@ impl FrontEnd {
             self.map
                 .add_keyframe(Rc::clone(&self.current_frame.as_ref().unwrap()))?;
             //self.map.add_keyframe(self.current_frame.as_ref().unwrap())?;
+
+            // set observation for keyframe
+            for feature in current_frame.deref().borrow_mut().left_features.iter() {
+                if let Some(mp_id) = feature.borrow().map_point_id {
+                    self.map.add_observation(mp_id, feature)?;
+                }
+            }
+
+            if let Some(current_frame) = &self.current_frame {
+                frame::detect_features(&current_frame.borrow().left_image, &Some(&current_frame.borrow().left_features))?;
+            }
         }
 
         Ok(())
