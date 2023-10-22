@@ -131,7 +131,14 @@ impl Frame {
     }
 
     pub fn find_left_keypoints(&mut self) -> Result<()> {
-        let left_kps = detect_features(&self.left_image, &None)?;
+        let left_kps = detect_features(
+            &self.left_image,
+            &if self.left_features.len() == 0 {
+                None
+            } else {
+                Some(&self.left_features)
+            },
+        )?;
         for kp in left_kps.iter() {
             self.left_features
                 .push(Rc::new(RefCell::new(Feature::new(&kp))));
@@ -165,7 +172,7 @@ impl Frame {
     }
 }
 
-pub fn detect_features(
+fn detect_features(
     mat: &Mat,
     features: &Option<&Vec<Rc<RefCell<Feature>>>>,
 ) -> Result<VectorOfKeyPoint> {

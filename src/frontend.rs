@@ -202,7 +202,8 @@ impl FrontEnd {
             }
 
             if let Some(current_frame) = &self.current_frame {
-                frame::detect_features(&current_frame.borrow().left_image, &Some(&current_frame.borrow().left_features))?;
+                current_frame.deref().borrow_mut().find_left_keypoints()?;
+                current_frame.deref().borrow_mut().find_right_keypoints()?;
             }
         }
 
