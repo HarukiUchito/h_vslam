@@ -6,7 +6,7 @@ use std::thread::current;
 
 use crate::camera::Camera;
 use crate::error::SLAMError;
-use crate::frame::{Feature, Frame, self};
+use crate::frame::{self, Feature, Frame};
 use crate::kitti_dataset::{self, KITTIDataset};
 use crate::map::Map;
 use anyhow::Result;
@@ -32,7 +32,7 @@ pub struct FrontEnd {
     left_camera: Option<Rc<Camera>>,
     right_camera: Option<Rc<Camera>>,
     image_output: Mat,
-    pub map: Map,
+    pub map: Rc<RefCell<Map>>,
 
     inliner_cnt: Option<usize>,
 
@@ -48,7 +48,7 @@ impl FrontEnd {
             left_camera: None,
             right_camera: None,
             image_output: Mat::default(),
-            map: Map::new(),
+            map: Rc::new(RefCell::new(Map::new())),
             inliner_cnt: None,
             relative_motion: yakf::lie::se3::SE3::from_r_t(
                 yakf::linalg::Matrix3::from_vec(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
@@ -115,11 +115,18 @@ impl FrontEnd {
         if let Some(current_frame) = &self.current_frame {
             //.as_deref()
             //.ok_or(SLAMError::new("set frame before initialization"))?;
-            current_frame.deref().borrow_mut().find_keypoints()?;
+            current_frame.deref().borrow_mut().find_keypoints(
+                if let Some(rcam) = &self.right_camera {
+                    Some(Rc::clone(&rcam))
+                } else {
+                    None
+                },
+                Rc::clone(&self.map),
+            )?;
 
             current_frame.deref().borrow_mut().set_as_keyframe(0)?;
             let num_landmarks = initialize_map(
-                &mut self.map,
+                Rc::clone(&self.map),
                 &Rc::clone(&self.current_frame.as_ref().unwrap()),
                 &self.left_camera.as_ref().unwrap().as_ref(),
                 &self.right_camera.as_ref().unwrap().as_ref(),
@@ -141,17 +148,22 @@ impl FrontEnd {
         }
 
         let num_track_last = self.track_last_frame()?;
-
         if let Some(current_frame) = &self.current_frame {
             let mut current_frame = current_frame.deref().borrow_mut();
-            current_frame.find_right_keypoints()?;
+            current_frame.find_right_keypoints(
+                if let Some(rcam) = &self.right_camera {
+                    Some(Rc::clone(&rcam))
+                } else {
+                    None
+                },
+                Rc::clone(&self.map),
+            )?;
 
             assert!(current_frame.left_features.len() == current_frame.right_features.len());
 
             current_frame.draw_keypoints_from_features(true)?;
             current_frame.draw_keypoints_from_features(false)?;
         }
-
         let inlier_cnt = self.estimate_current_pose()?;
         self.inliner_cnt = Some(inlier_cnt);
 
@@ -171,6 +183,17 @@ impl FrontEnd {
             }
         }
 
+        if let Some(last_frame) = &self.last_frame {
+            if let Some(current_frame) = &self.current_frame {
+                self.relative_motion = current_frame
+                    .borrow()
+                    .pose
+                    .act_g(last_frame.borrow().pose.inverse());
+                debug!("updated relative motion");
+                debug!("{}", self.relative_motion.to_r_t().0);
+                debug!("{}", self.relative_motion.to_r_t().1);
+            }
+        }
         //unimplemented!();
         Ok(())
     }
@@ -180,7 +203,7 @@ impl FrontEnd {
             {
                 // mutable borrow
                 let mut current_frame = current_frame.deref().borrow_mut();
-                let ksize = self.map.keyframes.len();
+                let ksize = self.map.borrow().keyframes.len();
                 current_frame.set_as_keyframe(ksize)?;
 
                 debug!(
@@ -190,20 +213,34 @@ impl FrontEnd {
                 );
             }
 
-            self.map
-                .add_keyframe(Rc::clone(&self.current_frame.as_ref().unwrap()))?;
-            //self.map.add_keyframe(self.current_frame.as_ref().unwrap())?;
+            {
+                let mut map_mut = self.map.deref().borrow_mut();
+                map_mut.add_keyframe(Rc::clone(&self.current_frame.as_ref().unwrap()))?;
+                //self.map.add_keyframe(self.current_frame.as_ref().unwrap())?;
 
-            // set observation for keyframe
-            for feature in current_frame.deref().borrow_mut().left_features.iter() {
-                if let Some(mp_id) = feature.borrow().map_point_id {
-                    self.map.add_observation(mp_id, feature)?;
+                // set observation for keyframe
+                for feature in current_frame.deref().borrow_mut().left_features.iter() {
+                    if let Some(mp_id) = feature.borrow().map_point_id {
+                        map_mut.add_observation(mp_id, feature)?;
+                    }
                 }
             }
 
             if let Some(current_frame) = &self.current_frame {
                 current_frame.deref().borrow_mut().find_left_keypoints()?;
-                current_frame.deref().borrow_mut().find_right_keypoints()?;
+                current_frame.deref().borrow_mut().find_right_keypoints(
+                    if let Some(rcam) = &self.right_camera {
+                        Some(Rc::clone(&rcam))
+                    } else {
+                        None
+                    },
+                    Rc::clone(&self.map),
+                )?;
+                triangulate_new_points(
+                    &Rc::clone(&current_frame),
+                    &self.left_camera.as_ref().unwrap().as_ref(),
+                    &self.right_camera.as_ref().unwrap().as_ref(),
+                )?;
             }
         }
 
@@ -225,7 +262,7 @@ impl FrontEnd {
             let left_camera = self.left_camera.as_ref().unwrap();
             //println!("kp: {}, {}", kp.position.pt.x, kp.position.pt.y);
             if let Some(mp_id) = kp.map_point_id {
-                let mp = &self.map.landmarks[&mp_id];
+                let mp = &self.map.borrow().landmarks[&mp_id];
                 let px = left_camera.world_to_pixel(&mp.position, &current_frame.pose);
                 //self.left_camera.unwrap().world_to_camera(p_w, t_c_w)
                 last_kps.push(kp.position.pt); // just push the keypoint in mat1
@@ -275,6 +312,8 @@ impl FrontEnd {
                 current_frame
                     .left_features
                     .push(Rc::new(RefCell::new(feat)));
+            } else {
+                //debug!("track last s0 {}", i);
             }
         }
         debug!(
@@ -288,16 +327,16 @@ impl FrontEnd {
     }
 
     fn estimate_current_pose(&self) -> anyhow::Result<usize> {
-        debug!(
-            "frame pose before: {:?}",
-            self.current_frame
-                .as_ref()
-                .expect("msg")
-                .borrow()
-                .pose
-                .to_grp()
-        );
-
+        /*        debug!(
+                    "frame pose before: {:?}",
+                    self.current_frame
+                        .as_ref()
+                        .expect("msg")
+                        .borrow()
+                        .pose
+                        .to_grp()
+                );
+        */
         let (p_r, p_t) = self
             .current_frame
             .as_ref()
@@ -334,7 +373,7 @@ impl FrontEnd {
             let frame = current_frame.left_features[i].clone();
             if let Some(mp_id) = frame.borrow().map_point_id {
                 feature_indices.push(i);
-                let mp = &self.map.landmarks[&mp_id];
+                let mp = &self.map.borrow().landmarks[&mp_id];
                 let mp_pos = g2o::Vec3::from_nalgebra(&unsafe { std::mem::transmute(mp.position) });
 
                 let fpos = g2o::Vec2::from_nalgebra(&unsafe {
@@ -379,9 +418,10 @@ impl FrontEnd {
                 debug!("opt ini: {}, iternum: {}", optini, optnum);
             }
 
-            for j in 0..feature_indices.len() {
+            for j in 0..evec.len() {
                 let mut e = evec[j].deref().borrow_mut();
-                let mut f = current_frame.left_features[j].deref().borrow_mut();
+                let f_idx = feature_indices[j];
+                let mut f = current_frame.left_features[f_idx].deref().borrow_mut();
                 if f.is_outlier {
                     e.compute_error();
                 }
@@ -409,7 +449,11 @@ impl FrontEnd {
                     std::mem::transmute(tv)
                 });
         }
-        debug!("updated pose rt: {:?}", current_frame.pose.to_r_t());
+        debug!("updated pose R: {}", current_frame.pose.to_r_t().0);
+        debug!(
+            "updated pose t: {}",
+            current_frame.pose.to_r_t().1.transpose()
+        );
 
         let inlier_cnt = feature_indices.len() - outlier_cnt;
         debug!("cnt outlier/inlier : {} / {}", outlier_cnt, inlier_cnt);
@@ -420,6 +464,7 @@ impl FrontEnd {
             if f.is_outlier {
                 f.map_point_id = None;
                 f.is_outlier = false;
+                //debug!("outlier mp {}", i);
             }
         }
 
@@ -487,12 +532,14 @@ fn setup_test() -> Result<KITTIDataset> {
 #[test]
 fn test_triangulation() -> Result<()> {
     let mut dataset = setup_test()?;
-
-    let mut first_frame = dataset.get_frame()?;
-    first_frame.find_keypoints()?;
-
     let left_camera = *dataset.get_camera(0).as_ref();
     let right_camera = *dataset.get_camera(1).as_ref();
+
+    let mut first_frame = dataset.get_frame()?;
+    first_frame.find_keypoints(
+        Some(Rc::new(right_camera)),
+        Rc::new(RefCell::new(Map::new())),
+    )?;
 
     let poses = vec![left_camera.pose, right_camera.pose];
 
@@ -533,8 +580,48 @@ fn test_triangulation() -> Result<()> {
     Ok(())
 }
 
+fn triangulate_new_points(
+    frame: &Rc<RefCell<Frame>>,
+    left_camera: &Camera,
+    right_camera: &Camera,
+) -> Result<usize> {
+    let poses = vec![left_camera.pose, right_camera.pose];
+    let frame_b = frame.borrow();
+    let current_pose_twc = frame_b.pose.inverse();
+    let mut num_triangulated = 0;
+    for i in 0..frame_b.left_features.len() {
+        if let Some(f_right) = &frame_b.right_features[i] {
+            let f_left = &frame_b.left_features[i];
+            if f_left.borrow().map_point_id.is_none() {
+                let left_pos = yakf::linalg::Vector2::from_vec(vec![
+                    f_left.borrow().position.pt.x as f64,
+                    f_left.borrow().position.pt.y as f64,
+                ]);
+                let right_pos = yakf::linalg::Vector2::from_vec(vec![
+                    f_right.borrow().position.pt.x as f64,
+                    f_right.borrow().position.pt.y as f64,
+                ]);
+                let points = vec![
+                    left_camera.pixel_to_camera(&left_pos, 1.),
+                    right_camera.pixel_to_camera(&right_pos, 1.),
+                ];
+                //debug!("i {}", i);
+                //debug!("points {:?}", points);
+
+                if let Ok(pt_world) = triangulation(&poses, &points) {
+                    if pt_world[2] > 0.0 {
+                        num_triangulated += 1;
+                    }
+                }
+            }
+        }
+    }
+    debug!("num triangulated points : {}", num_triangulated);
+    Ok(num_triangulated)
+}
+
 fn initialize_map(
-    map: &mut Map,
+    map: Rc<RefCell<Map>>,
     frame: &Rc<RefCell<Frame>>,
     left_camera: &Camera,
     right_camera: &Camera,
@@ -542,6 +629,7 @@ fn initialize_map(
     let poses = vec![left_camera.pose, right_camera.pose];
     let mut num_landmarks = 0;
     let frame_b = frame.borrow();
+    let mut map_mut = map.deref().borrow_mut();
     for i in 0..frame_b.left_features.len() {
         let f_left = &frame_b.left_features[i];
         let f_right = match &frame_b.right_features[i] {
@@ -565,37 +653,38 @@ fn initialize_map(
         if let Ok(pt_world) = triangulation(&poses, &points) {
             //println!("ptw: {}", pt_world);
             num_landmarks += 1;
-            let new_id = map.add_new_map_point(&pt_world);
-            map.add_observation(new_id, f_left)?;
-            map.add_observation(new_id, f_right)?;
+            let new_id = map_mut.add_new_map_point(&pt_world);
+            map_mut.add_observation(new_id, f_left)?;
+            map_mut.add_observation(new_id, f_right)?;
 
             frame_b.left_features[i].deref().borrow_mut().map_point_id = Some(new_id);
             if let Some(r_feature) = &frame_b.right_features[i] {
                 r_feature.deref().borrow_mut().map_point_id = Some(new_id);
             }
+        } else {
+            debug!("no map point {}", i);
         }
     }
     println!("initial map created with {} map points", num_landmarks);
     //let points = vec![left_camera.pixel_to_camera(yakf::so2::Vec2::, depth)];
 
-    map.add_keyframe(Rc::clone(frame))?;
+    map_mut.add_keyframe(Rc::clone(frame))?;
     Ok(num_landmarks)
 }
 
 #[test]
 fn test_map_initialization() -> Result<()> {
     let dataset = setup_test()?;
-
-    let mut first_frame = dataset.get_frame()?;
-    first_frame.find_keypoints()?;
-
     let left_camera = *dataset.get_camera(0).as_ref();
     let right_camera = *dataset.get_camera(1).as_ref();
 
-    let mut map = Map::new();
+    let mut first_frame = dataset.get_frame()?;
+    let map = Rc::new(RefCell::new(Map::new()));
+    first_frame.find_keypoints(Some(Rc::new(right_camera)), Rc::clone(&map))?;
+
     first_frame.set_as_keyframe(0)?;
     let num_landmarks = initialize_map(
-        &mut map,
+        Rc::clone(&map),
         &Rc::new(RefCell::new(first_frame)),
         &left_camera,
         &right_camera,
@@ -648,5 +737,29 @@ fn test_estimate_current_pose() -> Result<()> {
 
     assert_eq!(frontend.inliner_cnt, Some(72));
 
+    Ok(())
+}
+
+#[test]
+fn test_yakf() -> Result<()> {
+    use core::f64::consts::PI;
+    use yakf::lie::se3::SE3;
+    use yakf::linalg::OMatrix;
+    use yakf::linalg::OVector;
+    use yakf::linalg::U3;
+    let theta: f64 = 0.01;
+    let e1 = OVector::<f64, U3>::new(theta.cos(), theta.sin(), 0.0);
+    let e2 = OVector::<f64, U3>::new((theta + PI / 2.0).cos(), (theta + PI / 2.0).sin(), 0.0);
+    let e3 = OVector::<f64, U3>::new(0.0, 0.0, 1.0);
+    let r = OMatrix::<f64, U3, U3>::from_columns(&[e1, e2, e3]);
+
+    let ro = 10.0;
+    let t = ro * OVector::<f64, U3>::new(theta.cos(), theta.sin(), 0.0);
+    let x = SE3::from_r_t(r, t);
+    println!("  r {:#?}", r);
+    println!(" rt {:#?}", x.to_r_t());
+    println!("alg {:#?}", x.to_alg());
+    println!("grp {:#?}", x.to_grp());
+    println!("vec {:#?}", x.to_vec());
     Ok(())
 }

@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
         pub2.publish(&img)?;
 
         let mut cloud = Vec::new();
-        for lm in frontend.map.landmarks.values() {
+        for lm in frontend.map.borrow().landmarks.values() {
             cloud.push(ros_pointcloud2::pcl_utils::PointXYZ {
                 x: lm.position[0] as f32,
                 y: lm.position[1] as f32,

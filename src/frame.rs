@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use anyhow::Ok;
 use image::open;
+use nalgebra::Point2;
 use opencv::core::Mat;
 use opencv::core::Point2f;
 use opencv::core::Scalar;
@@ -21,7 +22,10 @@ use opencv::core::KeyPoint;
 use anyhow::Result;
 use log::debug;
 
+use crate::camera;
+use crate::camera::Camera;
 use crate::error::SLAMError;
+use crate::frame;
 use crate::kitti_dataset;
 use crate::map::Map;
 use crate::map_point::MapPoint;
@@ -118,9 +122,13 @@ impl Frame {
         Ok(())
     }
 
-    pub fn find_keypoints(&mut self) -> Result<()> {
+    pub fn find_keypoints(
+        &mut self,
+        right_camera: Option<Rc<Camera>>,
+        map: Rc<RefCell<Map>>,
+    ) -> Result<()> {
         self.find_left_keypoints()?;
-        self.find_right_keypoints()?;
+        self.find_right_keypoints(right_camera, map)?;
 
         assert!(self.left_features.len() == self.right_features.len());
 
@@ -164,10 +172,21 @@ impl Frame {
         Ok(())
     }
 
-    pub fn find_right_keypoints(&mut self) -> Result<()> {
-        let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features))?;
-        self.right_features =
-            detect_feature_movement(&self.left_features, &self.left_image, &self.right_image)?;
+    pub fn find_right_keypoints(
+        &mut self,
+        camera_right: Option<Rc<Camera>>,
+        map: Rc<RefCell<Map>>,
+    ) -> Result<()> {
+        //let right_kps_img = detect_features(&self.right_image, &Some(&self.left_features))?;
+        //debug!("find right, left features len {}", self.left_features.len());
+        self.right_features = detect_feature_movement(
+            &self.left_features,
+            &self.left_image,
+            &self.right_image,
+            camera_right,
+            map,
+            &self.pose,
+        )?;
         Ok(())
     }
 }
@@ -213,15 +232,41 @@ fn detect_feature_movement(
     features: &Vec<Rc<RefCell<Feature>>>,
     mat1: &Mat,
     mat2: &Mat,
+    camera_right: Option<Rc<Camera>>,
+    map: Rc<RefCell<Map>>,
+    pose: &yakf::lie::se3::SE3,
 ) -> Result<Vec<Option<Rc<RefCell<Feature>>>>> {
     // prepare float keypoints for optical-flow
     let mut fkps1 = VectorOfPoint2f::new();
     let mut fkps2 = VectorOfPoint2f::new();
+    //debug!("pose R: {}", &pose.to_r_t().0);
+    //debug!("pose t: {}", &pose.to_r_t().1);
+    let mut cnt = 0;
     for kp in features.iter() {
         let kp = kp.deref().borrow();
         fkps1.push(kp.position.pt.clone()); // just push the keypoint in mat1
-        fkps2.push(kp.position.pt);
+                                            //debug!("{} kp {:?}", cnt, &kp.position.pt);
+
+        if let Some(mp_id) = kp.map_point_id {
+            let mp = &map.deref().borrow().landmarks[&mp_id];
+            let px = camera_right
+                .as_ref()
+                .unwrap()
+                .world_to_pixel(&mp.position, &pose);
+            //debug!("px {:?}", &px);
+            let fkp = Point2f::new(px[0] as f32, px[1] as f32);
+            //debug!("{} fkp {:?}", cnt, fkp);
+            fkps2.push(fkp);
+            //fkps2.push(kp.position.pt);
+        } else {
+            fkps2.push(kp.position.pt);
+        }
+        cnt += 1;
     }
+
+    //debug!("fkps1 {}, fkps2 {}", fkps1.len(), fkps2.len());
+    //debug!("mat1 {:?}", mat1.size());
+    //debug!("mat2 {:?}", mat2.size());
 
     let mut err = Mat::default();
     let mut status: opencv::core::Vector<u8> = Vec::new().into();
@@ -248,13 +293,14 @@ fn detect_feature_movement(
     let mut cnt = 0;
     for i in 0..status.len() {
         let s = status.get(i)?;
-        if s > 0 {
+        if s != 0 {
             cnt += 1;
             let kp = fkps2.get(i)?;
             features.push(Some(Rc::new(RefCell::new(Feature::new(
                 &KeyPoint::new_point(kp, 7.0, -1.0, 0.0, 0, -1)?,
             )))));
         } else {
+            //debug!("sn0 i {}", i);
             features.push(None);
         }
     }
