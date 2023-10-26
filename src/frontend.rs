@@ -57,6 +57,14 @@ impl FrontEnd {
         }
     }
 
+    pub fn get_current_pose(&self) -> Result<yakf::lie::se3::SE3, SLAMError> {
+        if let Some(current_frame) = &self.current_frame {
+            Ok(current_frame.borrow().pose)
+        } else {
+            Err(SLAMError::new("no pose available yet"))
+        }
+    }
+
     pub fn set_cameras(&mut self, left_camera: Rc<Camera>, right_camera: Rc<Camera>) {
         self.left_camera = Some(left_camera);
         self.right_camera = Some(right_camera);
@@ -237,6 +245,7 @@ impl FrontEnd {
                     Rc::clone(&self.map),
                 )?;
                 triangulate_new_points(
+                    Rc::clone(&self.map),
                     &Rc::clone(&current_frame),
                     &self.left_camera.as_ref().unwrap().as_ref(),
                     &self.right_camera.as_ref().unwrap().as_ref(),
@@ -581,6 +590,7 @@ fn test_triangulation() -> Result<()> {
 }
 
 fn triangulate_new_points(
+    map: Rc<RefCell<Map>>,
     frame: &Rc<RefCell<Frame>>,
     left_camera: &Camera,
     right_camera: &Camera,
@@ -589,6 +599,7 @@ fn triangulate_new_points(
     let frame_b = frame.borrow();
     let current_pose_twc = frame_b.pose.inverse();
     let mut num_triangulated = 0;
+    let mut map_mut = map.deref().borrow_mut();
     for i in 0..frame_b.left_features.len() {
         if let Some(f_right) = &frame_b.right_features[i] {
             let f_left = &frame_b.left_features[i];
@@ -610,7 +621,15 @@ fn triangulate_new_points(
 
                 if let Ok(pt_world) = triangulation(&poses, &points) {
                     if pt_world[2] > 0.0 {
+                        let pt_world = current_pose_twc.act_v(pt_world);
+                        let new_id = map_mut.add_new_map_point(&pt_world);
                         num_triangulated += 1;
+
+                        map_mut.add_observation(new_id, f_left)?;
+                        map_mut.add_observation(new_id, f_right)?;
+
+                        f_left.deref().borrow_mut().map_point_id = Some(new_id);
+                        f_right.deref().borrow_mut().map_point_id = Some(new_id);
                     }
                 }
             }
@@ -657,10 +676,8 @@ fn initialize_map(
             map_mut.add_observation(new_id, f_left)?;
             map_mut.add_observation(new_id, f_right)?;
 
-            frame_b.left_features[i].deref().borrow_mut().map_point_id = Some(new_id);
-            if let Some(r_feature) = &frame_b.right_features[i] {
-                r_feature.deref().borrow_mut().map_point_id = Some(new_id);
-            }
+            f_left.deref().borrow_mut().map_point_id = Some(new_id);
+            f_right.deref().borrow_mut().map_point_id = Some(new_id);
         } else {
             debug!("no map point {}", i);
         }

@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -8,6 +7,9 @@ use futures::future;
 use futures::stream::StreamExt;
 use opencv::prelude::{MatTraitConst, MatTraitManual};
 use r2r::QosProfile;
+use tokio::io::AsyncWriteExt;
+
+use glob::glob;
 
 use futures::executor::LocalPool;
 use futures::task::LocalSpawnExt;
@@ -31,11 +33,41 @@ async fn main() -> Result<()> {
 
     let mut frontend = frontend::FrontEnd::new();
     frontend.set_cameras(dataset.get_camera(0), dataset.get_camera(1));
-    let new_frame = dataset.get_frame()?;
-    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
-    dataset.next_frame();
-    let new_frame = dataset.get_frame()?;
-    frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+
+    let files: Vec<_> = glob(seq_dir_path.join("image_0/*.png").to_str().unwrap())
+        .unwrap()
+        .collect();
+    println!("file num {}", files.len());
+    let mut pose_log = tokio::fs::File::create("own_imp_poses.txt").await?;
+
+    for i in 0..30 {
+        //files.len() {
+        if i > 0 {
+            dataset.next_frame();
+        }
+        let new_frame = dataset.get_frame()?;
+        frontend.update(&Rc::new(RefCell::new(new_frame)))?;
+
+        let (rm, vm) = frontend.get_current_pose()?.to_r_t();
+        let pstr = format!(
+            "{} {} {} {} {} {} {} {} {} {} {} {}\n",
+            rm[(0, 0)],
+            rm[(0, 1)],
+            rm[(0, 2)],
+            vm[0],
+            rm[(1, 0)],
+            rm[(1, 1)],
+            rm[(1, 2)],
+            vm[1],
+            rm[(2, 0)],
+            rm[(2, 1)],
+            rm[(2, 2)],
+            vm[2]
+        );
+        pose_log.write(pstr.as_bytes()).await?;
+    }
+
+    return Ok(());
 
     let dataset_arc = Arc::new(Mutex::new(dataset));
 
